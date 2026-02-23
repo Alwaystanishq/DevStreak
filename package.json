@@ -1,0 +1,44 @@
+{
+  "name": "devstreak",
+  "publisher": "Alwaystanishq",
+  "displayName": "DevStreak",
+  "description": "Track coding time, edited files and typing activity with a calendar activity heatmap.",
+  "version": "0.0.1",
+  "license": "MIT",
+  "icon": "images/icon.jpg",
+  "repository": {
+  "type": "git",
+  "url": "https://github.com/Alwaystanishq/devstreak.git"
+},
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "*"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "devstreak.openActivity",
+        "title": "DevStreak: Open Activity"
+      }
+    ]
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.109.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "eslint": "^9.39.2",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2"
+  }
+}
