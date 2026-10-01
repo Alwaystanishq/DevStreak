@@ -1,15 +1,33 @@
-const assert = require('assert');
+const assert = require("node:assert/strict");
+const vscode = require("vscode");
 
-// You can import and use all API from the 'vscode' module
-// as well as import your extension to test it
-const vscode = require('vscode');
-// const myExtension = require('../extension');
+suite("DevStreak extension host", () => {
+  suiteSetup(async () => {
+    const extension = vscode.extensions.getExtension("Alwaystanishq.devstreak");
+    assert.ok(extension, "DevStreak must be installed in the test host");
+    await extension.activate();
+    assert.equal(extension.isActive, true);
+  });
 
-suite('Extension Test Suite', () => {
-	vscode.window.showInformationMessage('Start all tests.');
+  test("registers every contributed command", async () => {
+    const commands = await vscode.commands.getCommands(true);
+    const manifest = require("../package.json");
+    for (const { command } of manifest.contributes.commands) {
+      assert.ok(commands.includes(command), command + " must be registered");
+    }
+  });
 
-	test('Sample test', () => {
-		assert.strictEqual(-1, [1, 2, 3].indexOf(5));
-		assert.strictEqual(-1, [1, 2, 3].indexOf(0));
-	});
+  test("opens and reuses the activity panel", async () => {
+    await vscode.commands.executeCommand("devstreak.openActivity");
+    await vscode.commands.executeCommand("devstreak.openActivity");
+    const panels = vscode.window.tabGroups.all.flatMap((group) => group.tabs)
+      .filter((tab) => tab.label === "DevStreak Activity");
+    assert.equal(panels.length, 1);
+    await vscode.window.tabGroups.close(panels);
+  });
+
+  test("pause and resume commands work", async () => {
+    await vscode.commands.executeCommand("devstreak.togglePause");
+    await vscode.commands.executeCommand("devstreak.togglePause");
+  });
 });

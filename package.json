@@ -2,14 +2,14 @@
   "name": "devstreak",
   "publisher": "Alwaystanishq",
   "displayName": "DevStreak",
-  "description": "Track coding time, edited files and typing activity with a calendar activity heatmap.",
+  "description": "Track active coding time, daily goals and streaks with a private activity dashboard.",
   "version": "0.0.1",
   "license": "MIT",
   "icon": "images/icon.jpg",
   "repository": {
-  "type": "git",
-  "url": "https://github.com/Alwaystanishq/devstreak.git"
-},
+    "type": "git",
+    "url": "https://github.com/Alwaystanishq/devstreak.git"
+  },
   "engines": {
     "vscode": "^1.109.0"
   },
@@ -17,7 +17,7 @@
     "Other"
   ],
   "activationEvents": [
-    "*"
+    "onStartupFinished"
   ],
   "main": "./extension.js",
   "contributes": {
@@ -25,13 +25,87 @@
       {
         "command": "devstreak.openActivity",
         "title": "DevStreak: Open Activity"
+      },
+      {
+        "command": "devstreak.togglePause",
+        "title": "DevStreak: Pause / Resume Tracking"
+      },
+      {
+        "command": "devstreak.openSettings",
+        "title": "DevStreak: Open Settings"
+      },
+      {
+        "command": "devstreak.exportJson",
+        "title": "DevStreak: Export JSON Backup"
+      },
+      {
+        "command": "devstreak.exportCsv",
+        "title": "DevStreak: Export CSV"
+      },
+      {
+        "command": "devstreak.importJson",
+        "title": "DevStreak: Import JSON Backup"
+      },
+      {
+        "command": "devstreak.clearHistory",
+        "title": "DevStreak: Clear History"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "DevStreak",
+      "properties": {
+        "devstreak.idleTimeoutMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "Maximum grace period without editor activity. Counting stops sooner if VS Code reports the window inactive or unfocused. Reading time within the active grace period counts."
+        },
+        "devstreak.dailyGoalMinutes": {
+          "type": "number",
+          "default": 60,
+          "minimum": 0,
+          "maximum": 1440,
+          "description": "Daily active-time goal in minutes. Set to 0 to turn off the goal."
+        },
+        "devstreak.streakMinimumMinutes": {
+          "type": "number",
+          "default": 15,
+          "minimum": 1,
+          "maximum": 1440,
+          "description": "Minimum active minutes in a local calendar day to qualify for a streak."
+        },
+        "devstreak.weekStartsOn": {
+          "type": "string",
+          "enum": [
+            "monday",
+            "sunday"
+          ],
+          "default": "monday",
+          "description": "First day of the calendar and weekly summary."
+        },
+        "devstreak.ignoredFolders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "node_modules",
+            ".git",
+            "dist",
+            "build"
+          ],
+          "description": "Folder names or relative folder paths excluded from tracking, such as node_modules or src/generated. Matches whole path segments; wildcards are not supported."
+        }
+      }
+    }
   },
   "scripts": {
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "pretest": "npm run lint",
-    "test": "vscode-test"
+    "test": "node --test \"test/unit/*.test.js\"",
+    "test:unit": "node --test \"test/unit/*.test.js\"",
+    "test:integration": "vscode-test"
   },
   "devDependencies": {
     "@types/vscode": "^1.109.0",
@@ -39,6 +113,7 @@
     "@types/node": "22.x",
     "eslint": "^9.39.2",
     "@vscode/test-cli": "^0.0.12",
-    "@vscode/test-electron": "^2.5.2"
+    "@vscode/test-electron": "^2.5.2",
+    "globals": "14.0.0"
   }
 }
