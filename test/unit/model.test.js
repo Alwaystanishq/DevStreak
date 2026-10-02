@@ -53,6 +53,7 @@ test("legacy migration preserves original dates, deduplicates files and skips em
   assert.deepEqual(Object.keys(result.days), ["2026-10-01", "2026-10-03"]);
   assert.deepEqual(result.days["2026-10-01"].projects.legacy, {
     name: "Earlier activity", time: 4.5, characters: 20,
+    languages: { unknown: 4.5 },
     files: { "legacy:index.js": "index.js", "legacy:<script>.js": "<script>.js" },
   });
   assert.equal(result.days["2026-10-03"].projects.legacy.time, 0);
@@ -260,4 +261,83 @@ test("duration formatting floors subsecond totals and permits long sessions", ()
   assert.equal(formatDuration(360000), "100:00:00");
   assert.equal(formatDuration(-1), "00:00:00");
   assert.equal(formatDuration(NaN), "00:00:00");
+});
+
+test("version-2 backups migrate to unknown language without guessing from filenames", () => {
+  const old = { version: 2, days: { "2026-10-02": { projects: {
+    app: { name: "App", time: 12.5, characters: 3, files: { "file:///x.py": "x.py" } },
+    edits: { name: "Edits", time: 0, characters: 1, files: {} },
+  } } } };
+  const original = structuredClone(old);
+  const migrated = validateData(old);
+  assert.equal(migrated.version, 3);
+  assert.deepEqual(migrated.days["2026-10-02"].projects.app.languages, { unknown: 12.5 });
+  assert.deepEqual(migrated.days["2026-10-02"].projects.edits.languages, {});
+  assert.deepEqual(old, original);
+  assert.deepEqual(validateData(migrated), migrated);
+  const updated = applyChanges(old, [change("2026-10-02", 2, { projectId: "app", languageId: "python" })]);
+  assert.deepEqual(updated.days["2026-10-02"].projects.app.languages, { unknown: 12.5, python: 2 });
+  assert.deepEqual(validateData(updated), updated);
+});
+
+test("language changes preserve prior buckets and edits without time add no language duration", () => {
+  const first = applyChanges(emptyData(), [change("2026-10-02", 0.1, { languageId: "javascript" })]);
+  const next = applyChanges(first, [
+    change("2026-10-02", 0.2, { languageId: "python" }),
+    change("2026-10-02", 0, { languageId: "markdown", characters: 100 }),
+    change("2026-10-02", 0.3, { languageId: "toString" }),
+  ]);
+  const project = next.days["2026-10-02"].projects["file:///project"];
+  assert.deepEqual(project.languages, { javascript: 0.1, python: 0.2, toString: 0.3 });
+  assert.deepEqual(first.days["2026-10-02"].projects["file:///project"].languages, { javascript: 0.1 });
+  assert.deepEqual(validateData(JSON.parse(JSON.stringify(next))), next);
+  const normalized = validateData(next);
+  normalized.days["2026-10-02"].projects["file:///project"].languages.python = 10;
+  assert.equal(project.languages.python, 0.2);
+});
+
+test("language validation rejects missing, malformed, unsafe and inconsistent buckets", () => {
+  for (const languages of [undefined, [], null, { python: -1 }, { python: NaN }, { python: Infinity }, { python: "1" }, { python: 2 }, {}, { "": 1 }, JSON.parse('{"__proto__":1}'), { constructor: 1 }]) {
+    const data = applyChanges(emptyData(), [change("2026-10-02", 1)]);
+    data.days["2026-10-02"].projects["file:///project"].languages = languages;
+    assert.throws(() => validateData(data), TypeError);
+  }
+  const missing = applyChanges(emptyData(), [change("2026-10-02", 1)]);
+  delete missing.days["2026-10-02"].projects["file:///project"].languages;
+  assert.throws(() => validateData(missing), TypeError);
+  for (const languageId of ["__proto__", "constructor", "prototype", "", 3]) {
+    assert.throws(() => applyChanges(emptyData(), [change("2026-10-02", 1, { languageId })]), TypeError);
+  }
+});
+
+test("language breakdowns aggregate by ID, sort ties, and respect project and period filters", () => {
+  const data = applyChanges(emptyData(), [
+    change("2026-09-27", 100, { languageId: "rust" }),
+    change("2026-09-28", 60, { languageId: "javascript" }),
+    change("2026-10-01", 30, { languageId: "python" }),
+    change("2026-10-02", 30, { projectId: "docs", languageId: "python" }),
+    change("2026-10-02", 20),
+    change("2026-10-03", 1000, { languageId: "go" }),
+  ]);
+  const result = summarize(data, { today: "2026-10-02" });
+  assert.deepEqual(result.breakdown.week.languages, [
+    { id: "javascript", seconds: 60 }, { id: "python", seconds: 60 }, { id: "unknown", seconds: 20 },
+  ]);
+  assert.deepEqual(result.breakdown.month.languages, [{ id: "python", seconds: 60 }, { id: "unknown", seconds: 20 }]);
+  assert.equal(result.breakdown.week.languages.reduce((sum, row) => sum + row.seconds, 0), result.breakdown.week.totalSeconds);
+  const filtered = summarize(data, { today: "2026-10-02", projectId: "docs" });
+  assert.deepEqual(filtered.breakdown.week.languages, [{ id: "python", seconds: 30 }]);
+  assert.deepEqual(summarize(data, { today: "2026-10-02", projectId: "missing" }).breakdown.week.languages, []);
+  assert.equal(summarize(data, { today: "2026-10-02", weekStartsOn: 0 }).breakdown.week.languages[0].id, "rust");
+});
+
+test("CSV includes language durations without changing its date/project row grouping", () => {
+  const data = applyChanges(emptyData(), [
+    change("2026-10-02", 2, { languageId: "javascript" }),
+    change("2026-10-02", 3, { languageId: "python" }),
+  ]);
+  const csv = toCsv(data);
+  assert.ok(csv.includes('"Language active seconds"'));
+  assert.ok(csv.includes('"{""javascript"":2,""python"":3}"'));
+  assert.equal(csv.split("\r\n").length, 3);
 });

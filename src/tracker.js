@@ -57,6 +57,7 @@ class ActiveTracker {
       date: localDateKey(new Date(at)),
       projectId: this.context.projectId,
       projectName: this.context.projectName,
+      languageId: this.context.languageId || "unknown",
       seconds: 0,
       characters,
       ...(file ? { file: { ...file } } : {}),
@@ -83,6 +84,7 @@ class ActiveTracker {
         date: localDateKey(new Date(cursor)),
         projectId: this.context.projectId,
         projectName: this.context.projectName,
+        languageId: this.context.languageId || "unknown",
         seconds: (boundary - cursor) / 1000,
         characters: 0,
       });

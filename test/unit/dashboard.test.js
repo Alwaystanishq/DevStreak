@@ -17,8 +17,8 @@ function snapshot(overrides = {}) {
 }
 
 function activitySnapshot(changes = [], options = {}) {
-  const data = applyChanges(emptyData(), changes.map(([date, seconds, projectId = "app", projectName = "app"]) =>
-    ({ date, seconds, projectId, projectName })));
+  const data = applyChanges(emptyData(), changes.map(([date, seconds, projectId = "app", projectName = "app", languageId]) =>
+    ({ date, seconds, projectId, projectName, languageId })));
   return snapshot({ ...summarize(data, { today: "2026-10-02", ...options }), projectId: options.projectId || "" });
 }
 
@@ -213,4 +213,65 @@ test("webview uses external resources and a unique nonce under a restrictive CSP
   assert.ok(first.includes("media/dashboard.css"));
   assert.equal(/\son[a-z]+=/i.test(first), false);
   assert.equal(/unsafe-inline|https?:\/\//.test(first), false);
+});
+
+test("language chart shows sorted durations, shares and accessible meters", () => {
+  const ui = dashboardFixture();
+  const data = activitySnapshot([
+    ["2026-10-02", 120, "app", "app", "javascript"],
+    ["2026-10-02", 60, "app", "app", "python"],
+  ]);
+  ui.receive(data);
+  const rows = ui.document.querySelectorAll(".language-time-row");
+  assert.equal(rows.length, 2);
+  assert.ok(rows[0].textContent.includes("JavaScript2m · 66.7%"));
+  assert.ok(rows[1].textContent.includes("Python1m · 33.3%"));
+  assert.equal(rows[0].querySelector("meter").value, 120);
+  assert.equal(rows[0].querySelector("meter").max, 180);
+  assert.equal(rows[0].querySelector("meter").getAttribute("aria-label"), "JavaScript active time");
+  assert.equal(rows[0].querySelector("meter").getAttribute("aria-valuetext"), "2m, 66.7% of active time");
+  assert.equal(ui.document.getElementById("language-note").hidden, true);
+  ui.receive(data);
+  assert.equal(ui.document.querySelector(".language-time-row"), rows[0]);
+});
+
+test("language period restores independently and follows project filters and history clearing", () => {
+  const ui = dashboardFixture({ languagePeriod: "month", breakdownPeriod: "week" });
+  const changes = [
+    ["2026-09-28", 60, "app", "app", "javascript"],
+    ["2026-10-02", 120, "docs", "Docs", "markdown"],
+  ];
+  ui.receive(activitySnapshot(changes));
+  assert.equal(ui.document.getElementById("language-month").getAttribute("aria-pressed"), "true");
+  assert.equal(ui.document.getElementById("breakdown-week").getAttribute("aria-pressed"), "true");
+  assert.equal(ui.document.querySelectorAll(".language-time-row").length, 1);
+  ui.click("language-week");
+  assert.equal(ui.state.languagePeriod, "week");
+  assert.equal(ui.state.breakdownPeriod, "week");
+  assert.equal(ui.document.querySelectorAll(".language-time-row").length, 2);
+  ui.receive(activitySnapshot(changes, { projectId: "app" }));
+  assert.equal(ui.document.querySelectorAll(".language-time-row").length, 1);
+  assert.ok(ui.document.getElementById("language-context").textContent.endsWith("· app"));
+  assert.ok(ui.document.querySelector(".language-time-row").textContent.includes("100%"));
+  ui.receive(activitySnapshot());
+  assert.equal(ui.document.getElementById("language-empty").hidden, false);
+  assert.equal(ui.document.querySelectorAll(".language-time-row").length, 0);
+  assert.deepEqual(ui.messages, [{ type: "ready" }]);
+});
+
+test("unknown and custom languages render safely with fractional shares", () => {
+  const ui = dashboardFixture();
+  const hostile = "<img src=x onerror=alert(1)>";
+  ui.receive(activitySnapshot([
+    ["2026-10-02", 0.5], ["2026-10-02", 0.5, "app", "app", hostile],
+  ]));
+  const chart = ui.document.getElementById("language-breakdown");
+  assert.ok(chart.textContent.includes("Unknown language"));
+  assert.ok(chart.textContent.includes(hostile));
+  assert.ok(chart.textContent.includes("<1s · 50%"));
+  assert.equal(chart.querySelectorAll("img").length, 0);
+  assert.equal(ui.document.getElementById("language-note").hidden, false);
+  ui.receive(activitySnapshot([["2026-10-02", 1, "app", "app", "my-dsl"]]));
+  assert.ok(chart.textContent.includes("my-dsl"));
+  assert.equal(ui.document.getElementById("language-note").hidden, true);
 });

@@ -98,6 +98,13 @@ class ActivityController {
         this.tracker.activity();
       }),
       vscode.workspace.onDidChangeTextDocument((event) => this.onEdit(event)),
+      vscode.workspace.onDidOpenTextDocument((document) => {
+        // Changing language mode closes and reopens the document. Settle the
+        // old language's time without treating that change as user activity.
+        if (document.uri.toString() !== vscode.window.activeTextEditor?.document.uri.toString()) return;
+        this.syncContext(document);
+        this.render();
+      }),
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (!event.affectsConfiguration("devstreak")) return;
         this.config = this.settings();
@@ -115,9 +122,8 @@ class ActivityController {
     this.render();
   }
 
-  syncContext() {
+  syncContext(document = this.vscode.window.activeTextEditor?.document) {
     if (this.stopping) return;
-    const document = this.vscode.window.activeTextEditor?.document;
     this.activeContext = documentContext(this.vscode, document, this.config.ignoredFolders);
     this.tracker.setContext({
       ...this.activeContext,

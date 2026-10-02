@@ -39,10 +39,11 @@ test('independent stores merge concurrent writes without losing totals', async (
   const { directory, store } = await setup(t);
   const other = new ActivityStore({ directory });
   await other.init();
-  await Promise.all(Array.from({ length: 40 }, (_, i) => (i % 2 ? store : other).append([change])));
+  await Promise.all(Array.from({ length: 40 }, (_, i) => (i % 2 ? store : other).append([{ ...change, languageId: i % 2 ? 'python' : 'javascript' }])));
   const data = await store.read();
   assert.equal(project(data).time, 40);
   assert.equal(project(data).characters, 80);
+  assert.deepEqual(project(data).languages, { javascript: 20, python: 20 });
   assert.deepEqual(project(data).files, { [change.file.id]: change.file.path });
   assert.deepEqual(await fs.readdir(directory), ['activity.json']);
 });
@@ -229,4 +230,24 @@ test('cleanup failure after a committed append supplies data so callers cannot r
   } finally { fs.unlink = unlink; }
   assert.equal(project(await store.read()).time, 1);
   await assert.rejects(fs.stat(store.lockPath), { code: 'ENOENT' });
+});
+
+test('version-2 storage preserves old totals and persists language migration on the next append', async (t) => {
+  const { directory, store } = await setup(t);
+  const stored = JSON.parse(await fs.readFile(store.filePath, 'utf8'));
+  stored.data = { version: 2, days: { [change.date]: { projects: {
+    [change.projectId]: { name: change.projectName, time: 10, characters: 5, files: { [change.file.id]: change.file.path } },
+  } } } };
+  await fs.writeFile(store.filePath, JSON.stringify(stored));
+  const reopened = new ActivityStore({ directory });
+  const initial = await reopened.init();
+  assert.equal(initial.version, 3);
+  assert.deepEqual(project(initial).languages, { unknown: 10 });
+  await reopened.append([{ ...change, languageId: 'javascript' }]);
+  const persisted = JSON.parse(await fs.readFile(store.filePath, 'utf8'));
+  assert.equal(persisted.generation, stored.generation);
+  assert.equal(persisted.data.version, 3);
+  assert.equal(project(persisted.data).time, 11);
+  assert.deepEqual(project(persisted.data).languages, { unknown: 10, javascript: 1 });
+  assert.deepEqual(await new ActivityStore({ directory }).init(), persisted.data);
 });

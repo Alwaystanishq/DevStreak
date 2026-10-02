@@ -5,7 +5,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { ActivityController } = require("../../src/controller");
 const { ActivityStore } = require("../../src/storage");
-const { summarize, localDateKey } = require("../../src/model");
+const { summarize, localDateKey, validateData } = require("../../src/model");
 
 function event() {
   const listeners = new Set();
@@ -24,7 +24,7 @@ async function fixture(t, options = {}) {
   const errors = [];
   const state = new Map();
   const uri = (value) => ({ scheme: "file", path: value, fsPath: value, toString: () => "file://" + value });
-  const editor = { document: { uri: uri("/work/app/src/index.js"), fileName: "/work/app/src/index.js" } };
+  const editor = { document: { uri: uri("/work/app/src/index.js"), fileName: "/work/app/src/index.js", languageId: "javascript" } };
   const panel = {
     visible: true, reveal() {}, onDidDispose: event(), onDidChangeViewState: event(),
     dispose() { this.onDidDispose.fire(); },
@@ -51,7 +51,7 @@ async function fixture(t, options = {}) {
     workspace: {
       getConfiguration: () => ({ get: (_key, fallback) => fallback }),
       getWorkspaceFolder: () => ({ name: "app", uri: uri("/work/app") }),
-      onDidChangeTextDocument: event(), onDidChangeConfiguration: event(), onDidChangeWorkspaceFolders: event(),
+      onDidChangeTextDocument: event(), onDidOpenTextDocument: event(), onDidChangeConfiguration: event(), onDidChangeWorkspaceFolders: event(),
     },
   };
   const context = {
@@ -358,7 +358,7 @@ test("export ignores the project filter and produces a validated backup", async 
   f.vscode.workspace.fs = { writeFile: async (uri, bytes) => { assert.equal(uri, output); content = Buffer.from(bytes).toString(); } };
   await f.controller.exportData("json");
   const backup = JSON.parse(content);
-  assert.equal(backup.version, 2);
+  assert.equal(backup.version, 3);
   assert.equal(backup.days[localDateKey()].projects["file:///work/app"].characters, 3);
   const csvOutput = [];
   f.vscode.workspace.fs.writeFile = async (_uri, bytes) => csvOutput.push(Buffer.from(bytes).toString());
@@ -398,9 +398,61 @@ test("confirmed import replaces history and discards the old pending activity", 
     readFile: async () => Buffer.from(JSON.stringify(backup)),
   };
   await f.controller.importData();
-  assert.deepEqual(f.controller.data, backup);
+  assert.deepEqual(f.controller.data, validateData(backup));
   assert.equal(f.controller.pending.length, 0);
   assert.equal(f.controller.tracker.status(), "idle");
   await f.controller.flush();
-  assert.deepEqual(await f.controller.store.read(), backup);
+  assert.deepEqual(await f.controller.store.read(), validateData(backup));
+});
+
+test("switching files in one project attributes time to each editor language and saves it", async (t) => {
+  const f = await fixture(t, { now: new Date(2026, 9, 2, 12).getTime() });
+  f.edit("x");
+  f.advance(2000);
+  const oldUri = f.editor.document.uri;
+  f.editor.document = {
+    uri: { ...oldUri, path: "/work/app/readme.md", toString: () => "file:///work/app/readme.md" },
+    fileName: "/work/app/readme.md", languageId: "markdown",
+  };
+  f.vscode.window.onDidChangeActiveTextEditor.fire(f.editor);
+  f.advance(3000);
+  await f.controller.flush();
+  const result = f.controller.snapshot();
+  assert.deepEqual(result.breakdown.week.languages, [{ id: "markdown", seconds: 3 }, { id: "javascript", seconds: 2 }]);
+  assert.deepEqual((await f.controller.store.read()).days["2026-10-02"].projects["file:///work/app"].languages, { javascript: 2, markdown: 3 });
+});
+
+test("language-mode changes use the reopened document before the active editor updates", async (t) => {
+  const f = await fixture(t, { now: new Date(2026, 9, 2, 12).getTime() });
+  f.edit("x");
+  f.advance(1000);
+  const reopened = { ...f.editor.document, languageId: "python" };
+  f.vscode.workspace.onDidOpenTextDocument.fire(reopened);
+  f.advance(2000);
+  assert.deepEqual(f.controller.snapshot().breakdown.week.languages, [{ id: "python", seconds: 2 }, { id: "javascript", seconds: 1 }]);
+  f.editor.document = reopened;
+  f.advance(301000); // A long gap stops activity.
+  f.vscode.workspace.onDidOpenTextDocument.fire({ ...reopened, languageId: "plaintext" });
+  assert.equal(f.controller.snapshot().status, "idle");
+  f.advance(1000);
+  assert.equal(f.controller.snapshot().summary.todaySeconds, 3);
+});
+
+test("version-3 import and export preserve language buckets", async (t) => {
+  const f = await fixture(t);
+  const backup = { version: 3, days: { "2026-01-01": { projects: {
+    restored: { name: "Restored", time: 120, characters: 7, files: {}, languages: { javascript: 80, python: 40 } },
+  } } } };
+  f.vscode.window.showOpenDialog = async () => [{ path: "/backup.json" }];
+  f.vscode.window.showWarningMessage = async () => "Replace history";
+  let exported;
+  f.vscode.workspace.fs = {
+    stat: async () => ({ size: 500 }), readFile: async () => Buffer.from(JSON.stringify(backup)),
+    writeFile: async (_uri, bytes) => { exported = JSON.parse(Buffer.from(bytes).toString()); },
+  };
+  await f.controller.importData();
+  assert.deepEqual(f.controller.data, backup);
+  f.vscode.window.showSaveDialog = async () => ({ path: "/export.json" });
+  await f.controller.exportData("json");
+  assert.deepEqual(exported, backup);
 });

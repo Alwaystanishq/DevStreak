@@ -3,7 +3,7 @@
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 function emptyData() {
-  return { version: 2, days: {} };
+  return { version: 3, days: {} };
 }
 
 function localDateKey(date = new Date()) {
@@ -69,7 +69,7 @@ function quantity(value, label, integer = false) {
 
 function validateData(input) {
   record(input, "Backup", ["version", "days"]);
-  if (input.version !== 2) throw new TypeError("Unsupported backup version.");
+  if (![2, 3].includes(input.version)) throw new TypeError("Unsupported backup version.");
   record(input.days, "Days");
   const result = emptyData();
   for (const [date, day] of Object.entries(input.days)) {
@@ -79,22 +79,43 @@ function validateData(input) {
     const projects = {};
     for (const [id, project] of Object.entries(day.projects)) {
       safeId(id, "project ID");
-      record(project, "Project", ["name", "time", "characters", "files"]);
+      record(project, "Project", ["name", "time", "characters", "files", ...(input.version === 3 ? ["languages"] : [])]);
       record(project.files, "Files");
       const files = {};
       for (const [fileId, path] of Object.entries(project.files)) {
         files[safeId(fileId, "file ID")] = text(path, "File path");
       }
+      const time = quantity(project.time, "Time");
+      const languages = input.version === 2 ? unknownLanguages(time) : validateLanguages(project.languages, time);
       projects[id] = {
         name: text(project.name, "Project name"),
-        time: quantity(project.time, "Time"),
+        time,
         characters: quantity(project.characters, "Characters", true),
         files,
+        languages,
       };
     }
     result.days[date] = { projects };
   }
   return result;
+}
+
+function unknownLanguages(time) {
+  return time > 0 ? { unknown: time } : {};
+}
+
+function validateLanguages(input, time) {
+  record(input, "Languages");
+  const languages = {};
+  let total = 0;
+  for (const [id, seconds] of Object.entries(input)) {
+    languages[safeId(id, "language ID")] = quantity(seconds, "Language time");
+    total = quantity(total + seconds, "Total language time");
+  }
+  // Language buckets accumulate in a different order from the project total.
+  const tolerance = Math.max(1, time) * 1e-9;
+  if (Math.abs(total - time) > tolerance) throw new TypeError("Language times must add up to project time.");
+  return languages;
 }
 
 function migrateLegacy(input) {
@@ -109,7 +130,7 @@ function migrateLegacy(input) {
       if (typeof name === "string" && name.length) files[`legacy:${name}`] = name;
     }
     if (time || characters || Object.keys(files).length) {
-      result.days[date] = { projects: { legacy: { name: "Earlier activity", time, characters, files } } };
+      result.days[date] = { projects: { legacy: { name: "Earlier activity", time, characters, files, languages: unknownLanguages(time) } } };
     }
   }
   return result;
@@ -117,13 +138,15 @@ function migrateLegacy(input) {
 
 function applyChanges(data, changes) {
   if (!Array.isArray(changes)) throw new TypeError("Changes must be an array.");
-  const result = { version: 2, days: { ...data.days } };
+  if (data.version === 2) data = validateData(data);
+  const result = { version: 3, days: { ...data.days } };
   for (const change of changes) {
     if (!change || !isDateKey(change.date)) throw new TypeError("Invalid change date.");
     const id = safeId(change.projectId, "project ID");
     const name = text(change.projectName, "Project name");
     const seconds = quantity(change.seconds ?? 0, "Seconds");
     const characters = quantity(change.characters ?? 0, "Characters", true);
+    const languageId = safeId(change.languageId ?? "unknown", "language ID");
     if (change.file) {
       safeId(change.file.id, "file ID");
       text(change.file.path, "File path");
@@ -136,7 +159,12 @@ function applyChanges(data, changes) {
       time: quantity(previous.time + seconds, "Total time"),
       characters: quantity(previous.characters + characters, "Total characters", true),
       files: { ...previous.files },
+      languages: { ...(previous.languages ?? unknownLanguages(previous.time)) },
     };
+    if (seconds > 0) {
+      const previousSeconds = Object.hasOwn(project.languages, languageId) ? project.languages[languageId] : 0;
+      project.languages[languageId] = quantity(previousSeconds + seconds, "Total language time");
+    }
     if (change.file) project.files[change.file.id] = change.file.path;
     result.days[change.date] = { projects: { ...day?.projects, [id]: project } };
   }
@@ -154,6 +182,7 @@ function periodActivity(data, start, end, projectId, goalSeconds, names) {
   let activeDays = 0;
   let goalDays = goalSeconds > 0 ? 0 : null;
   const projects = new Map();
+  const languages = new Map();
   for (const [date, day] of Object.entries(data.days)) {
     if (date < start || date > end) continue;
     let daySeconds = 0;
@@ -161,6 +190,9 @@ function periodActivity(data, start, end, projectId, goalSeconds, names) {
       if (projectId && id !== projectId) continue;
       daySeconds += project.time;
       if (project.time > 0) projects.set(id, (projects.get(id) || 0) + project.time);
+      for (const [languageId, seconds] of Object.entries(project.languages ?? unknownLanguages(project.time))) {
+        if (seconds > 0) languages.set(languageId, (languages.get(languageId) || 0) + seconds);
+      }
     }
     totalSeconds += daySeconds;
     if (daySeconds > 0) activeDays++;
@@ -170,6 +202,8 @@ function periodActivity(data, start, end, projectId, goalSeconds, names) {
     start, end, totalSeconds, activeDays,
     averageSeconds: activeDays ? totalSeconds / activeDays : 0,
     goalDays,
+    languages: [...languages].map(([id, seconds]) => ({ id, seconds }))
+      .sort((a, b) => b.seconds - a.seconds || a.id.localeCompare(b.id)),
     projects: [...projects].map(([id, seconds]) => ({ id, name: names.get(id), seconds }))
       .sort((a, b) => b.seconds - a.seconds || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
   };
@@ -258,12 +292,12 @@ function csvCell(value) {
 }
 
 function toCsv(data) {
-  const rows = [["Date", "Project", "Project ID", "Active seconds", "Characters added", "Files edited", "File paths"]];
+  const rows = [["Date", "Project", "Project ID", "Active seconds", "Characters added", "Files edited", "File paths", "Language active seconds"]];
   for (const date of Object.keys(data.days).sort()) {
     for (const id of Object.keys(data.days[date].projects).sort()) {
       const project = data.days[date].projects[id];
       const paths = Object.values(project.files).sort();
-      rows.push([date, project.name, id, project.time, project.characters, paths.length, paths.join("\n")]);
+      rows.push([date, project.name, id, project.time, project.characters, paths.length, paths.join("\n"), JSON.stringify(project.languages ?? unknownLanguages(project.time))]);
     }
   }
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";

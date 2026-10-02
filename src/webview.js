@@ -142,6 +142,19 @@ function getWebviewHTML(webview, extensionUri) {
         <p class="empty-breakdown" id="breakdown-empty" hidden>No active time recorded in this period. Your next session will appear here.</p>
         <p class="analytics-note" id="breakdown-total"></p>
       </article>
+      <article class="analytics-panel language-panel" aria-labelledby="language-title">
+        <div class="breakdown-toolbar">
+          <div class="section-heading"><h2 id="language-title">Language breakdown</h2><p id="language-context">Active time by language.</p></div>
+          <div class="view-switch" role="group" aria-label="Language breakdown period">
+            <button type="button" id="language-week" aria-pressed="true">This week</button>
+            <button type="button" id="language-month" aria-pressed="false">This month</button>
+          </div>
+        </div>
+        <ul class="project-breakdown language-breakdown" id="language-breakdown" aria-label="Language active time"></ul>
+        <p class="empty-breakdown" id="language-empty" hidden>No active time recorded in this period. Your next session will appear here.</p>
+        <p class="analytics-note" id="language-total"></p>
+        <p class="analytics-note" id="language-note" hidden>Unknown language includes earlier activity recorded before language tracking was available.</p>
+      </article>
     </section>
 
     <footer class="page-footer"><span>Saved on this device.</span><span>Reading and thinking count while your session is active.</span></footer>

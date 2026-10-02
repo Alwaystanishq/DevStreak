@@ -296,3 +296,37 @@ test("tracker rejects invalid intervals, character counts and timestamps", () =>
   assert.throws(() => tracker.edit({ characters: -1 }), TypeError);
   assert.throws(() => tracker.edit({ file: { id: "", path: "index.js" } }), TypeError);
 });
+
+test("language switches settle the old interval without extending the idle timeout", () => {
+  const { tracker, advance, changes, total } = setup();
+  tracker.setContext({ languageId: "javascript" });
+  tracker.activity();
+  advance(2500);
+  tracker.setContext({ languageId: "python" });
+  advance(8500);
+  tracker.tick();
+  assert.deepEqual(changes.map(({ languageId, seconds }) => ({ languageId, seconds })), [
+    { languageId: "javascript", seconds: 2.5 }, { languageId: "python", seconds: 7.5 },
+  ]);
+  assert.equal(total(), 10);
+  assert.equal(tracker.status(), "idle");
+  tracker.setContext({ languageId: "markdown" });
+  advance(1000);
+  tracker.tick();
+  assert.equal(total(), 10);
+});
+
+test("language attribution survives midnight and pause without recording paused time", () => {
+  const { tracker, advance, changes } = setup({ start: new Date(2026, 9, 1, 23, 59, 59, 750).getTime() });
+  tracker.setContext({ languageId: "typescript" });
+  tracker.activity();
+  advance(1000);
+  tracker.setPaused(true);
+  tracker.setContext({ languageId: "python" });
+  advance(1000);
+  tracker.tick();
+  assert.deepEqual(changes.map(({ date, seconds, languageId }) => ({ date, seconds, languageId })), [
+    { date: "2026-10-01", seconds: 0.25, languageId: "typescript" },
+    { date: "2026-10-02", seconds: 0.75, languageId: "typescript" },
+  ]);
+});

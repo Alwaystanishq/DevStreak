@@ -12,12 +12,14 @@
     mode: saved.mode === "year" ? "year" : "month",
     projectId: typeof saved.projectId === "string" ? saved.projectId : "",
     breakdownPeriod: saved.breakdownPeriod === "month" ? "month" : "week",
+    languagePeriod: saved.languagePeriod === "month" ? "month" : "week",
   };
   let snapshot;
   let calendarKey = "";
   let projectsKey = "";
   let filesKey = "";
   let breakdownKey = "";
+  let languageKey = "";
   const dateButtons = new Map();
   const monthTotals = new Map();
   const byId = (id) => document.getElementById(id);
@@ -333,6 +335,54 @@
     setText("breakdown-total", `${total} total · ${period.projects.length} ${period.projects.length === 1 ? "project" : "projects"} with active time`);
   }
 
+  function languageName(id) {
+    const names = {
+      unknown: "Unknown language", plaintext: "Plain Text", javascript: "JavaScript",
+      javascriptreact: "JavaScript React", typescript: "TypeScript", typescriptreact: "TypeScript React",
+      python: "Python", markdown: "Markdown", json: "JSON", jsonc: "JSON with Comments",
+      html: "HTML", css: "CSS", scss: "SCSS", less: "Less", vue: "Vue", svelte: "Svelte",
+      shellscript: "Shell Script", go: "Go", rust: "Rust", java: "Java", c: "C", cpp: "C++",
+      csharp: "C#", php: "PHP", ruby: "Ruby", swift: "Swift", kotlin: "Kotlin",
+      sql: "SQL", yaml: "YAML", xml: "XML", dockerfile: "Dockerfile",
+    };
+    return Object.hasOwn(names, id) ? names[id] : id;
+  }
+
+  function renderLanguages() {
+    const period = snapshot.breakdown?.[state.languagePeriod];
+    if (!period) return;
+    const languages = period.languages || [];
+    const project = snapshot.projects.find((item) => item.id === state.projectId);
+    setText("language-context", `${dateRange(period.start, period.end)} · ${project ? project.name : "All projects"}`);
+    for (const name of ["week", "month"]) byId(`language-${name}`).setAttribute("aria-pressed", String(name === state.languagePeriod));
+    const signature = JSON.stringify([state.languagePeriod, languages, period.totalSeconds]);
+    if (signature !== languageKey) {
+      languageKey = signature;
+      const rows = languages.map((language) => {
+        const row = element("li", "language-time-row");
+        const heading = element("div", "project-time-heading");
+        const name = element("span", "project-time-name", languageName(language.id));
+        name.title = language.id;
+        const time = language.seconds > 0 && language.seconds < 1 ? "<1s" : duration(language.seconds);
+        const share = percentFormatter.format(period.totalSeconds > 0 ? language.seconds / period.totalSeconds : 0);
+        heading.append(name, element("span", "project-time-value", `${time} · ${share}`));
+        const bar = element("meter", "project-time-bar");
+        bar.min = 0;
+        bar.max = period.totalSeconds || 1;
+        bar.value = language.seconds;
+        bar.setAttribute("aria-label", `${languageName(language.id)} active time`);
+        bar.setAttribute("aria-valuetext", `${time}, ${share} of active time`);
+        row.append(heading, bar);
+        return row;
+      });
+      byId("language-breakdown").replaceChildren(...rows);
+    }
+    byId("language-empty").hidden = languages.length > 0;
+    byId("language-note").hidden = !languages.some((language) => language.id === "unknown");
+    const total = period.totalSeconds > 0 && period.totalSeconds < 1 ? "<1s" : duration(period.totalSeconds);
+    setText("language-total", `${total} total · ${languages.length} ${languages.length === 1 ? "language" : "languages"} with active time`);
+  }
+
   function render() {
     if (!snapshot) return;
     renderSummary();
@@ -341,6 +391,7 @@
     renderDetails();
     renderInsights();
     renderBreakdown();
+    renderLanguages();
     byId("dashboard").setAttribute("aria-busy", "false");
   }
 
@@ -421,6 +472,11 @@
     state.breakdownPeriod = period;
     persist();
     if (snapshot) renderBreakdown();
+  });
+  for (const period of ["week", "month"]) byId(`language-${period}`).addEventListener("click", () => {
+    state.languagePeriod = period;
+    persist();
+    if (snapshot) renderLanguages();
   });
   byId("pause-button").addEventListener("click", () => send("togglePause"));
   byId("settings-button").addEventListener("click", () => send("settings"));

@@ -9,6 +9,7 @@ Click the stopwatch in the status bar or run **DevStreak: Open Activity** from t
 - See today's active time, this week's total, your current and longest streak, and daily goal progress.
 - Review weekly insights: active time compared with the same weekdays last week, average time per active day, and days meeting your current daily goal.
 - See each project's duration and share of active time for this week or this month, through today. The breakdown period is remembered while the dashboard tab remains open.
+- See each language's duration and share of active time for this week or this month, through today. Language breakdowns follow the project filter and remember their own period selection while the dashboard tab remains open.
 - Navigate between months or switch to a compact year overview.
 - Select a date for its precise duration, character count, and edited files grouped by project.
 - Filter the dashboard by project. The status bar always shows the total across all projects.
@@ -39,7 +40,9 @@ Dates follow the extension host's local timezone. Sessions crossing midnight are
 
 A streak day must meet the configured minimum active time: **15 minutes** by default. The current streak remains visible through today while you work toward that minimum; a missed previous day breaks it. The activity colors represent active time rather than character counts. For a streak threshold of `T` minutes, the levels are no active time, under `T`, `T` to under `2T`, `2T` to under `4T`, and `4T` or more. Exact thresholds appear in the legend tooltips. Empty records do not count as active days.
 
-Project filters apply to calendar details, streaks, weekly totals, goal progress, weekly insights, and project breakdowns. The status bar and data exports always include all projects.
+Project filters apply to calendar details, streaks, weekly totals, goal progress, weekly insights, project breakdowns, and language breakdowns. The status bar and data exports always include all projects.
+
+Language time follows the active editor's VS Code language mode, including untitled documents and custom languages. Switching files or changing language mode settles elapsed time under the previous language. Reading and thinking during the active grace period count toward that language; paused, idle, unfocused, and excluded activity follow the same rules as overall time. Earlier history appears as **Unknown language** because its original language cannot be reconstructed. Language shares use all active time in the selected period, including unknown time.
 
 Weekly comparisons respect your configured week start and compare the same elapsed weekdays in each week. An empty previous period shows **No baseline**. Average time uses only days with positive active time; edits without active time do not count as active days or appear in the time breakdown. Goal days are calculated using your current target, so changing it updates historical goal counts; disabling the goal shows **Off**. Insight and breakdown date ranges follow the current local day independently of calendar navigation.
 
@@ -61,7 +64,7 @@ DevStreak does not transmit activity or use external services. History is stored
 
 Existing history migrates once into **Earlier activity**. Original date buckets and measurements are preserved because older records used UTC dates and elapsed wall time; their project identity and original timezone cannot be reconstructed. Migration leaves the original VS Code record intact. Explicit clear/import operations also remove that original record in the current extension host.
 
-JSON export is a restorable backup of all projects, including file URIs and paths. Backups use data format version `2`; this is separate from the extension release version. CSV export contains one row per date and project with active seconds, character totals, file counts, and paths. Neither export is limited by the dashboard's project filter. Import accepts DevStreak version-2 JSON backups up to **20 MB**, validates their structure, and replaces existing history; export a backup first if you want to retain it. Other windows discard pending activity from the replaced history on their next save.
+JSON export is a restorable backup of all projects, including file URIs, paths, and language time. Backups use data format version `3`; this is separate from the extension release version. Existing version-2 storage and backups migrate automatically, preserving totals and assigning earlier time to Unknown language. CSV export contains one row per date and project with active seconds, character totals, file counts, paths, and a **Language active seconds** column containing a JSON map of language IDs to seconds. Neither export is limited by the dashboard's project filter. Import accepts DevStreak version-2 and version-3 JSON backups up to **20 MB**, validates their structure, and replaces existing history; export a backup first if you want to retain it. Other windows discard pending activity from the replaced history on their next save.
 
 Activity saves every five seconds and on normal extension deactivation. A forced crash can lose activity since the last completed save. Corrupt or unsupported stored data produces an error instead of being overwritten.
 

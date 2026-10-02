@@ -21,6 +21,7 @@ function documentContext(vscode, document, ignoredFolders) {
     eligible: !isIgnored(relativePath, ignoredFolders),
     projectId: folder ? folder.uri.toString() : "unassigned",
     projectName: folder ? folder.name : "Other files",
+    languageId: document.languageId || "unknown",
     file: { id: document.uri.toString(), path: relativePath || document.fileName },
   };
 }
