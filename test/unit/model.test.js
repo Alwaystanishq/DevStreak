@@ -147,6 +147,89 @@ test("a zero daily goal disables the goal without changing streak qualification"
   assert.equal(summary.currentStreak, 1);
 });
 
+test("weekly insights compare matching weekdays and average only days with active time", () => {
+  const data = applyChanges(emptyData(), [
+    change("2026-09-21", 1800), change("2026-09-25", 1800),
+    change("2026-09-26", 90000), // Last week's Saturday is outside Friday's comparison.
+    change("2026-09-28", 3600), change("2026-10-01", 1800), change("2026-10-02", 1800),
+    change("2026-09-29", 0, { characters: 100 }),
+    change("2026-10-03", 90000), // Future activity is excluded.
+  ]);
+  const { insights, breakdown } = summarize(data, { today: "2026-10-02" });
+  assert.deepEqual(insights, {
+    start: "2026-09-28", end: "2026-10-02", comparisonStart: "2026-09-21", comparisonEnd: "2026-09-25",
+    previousSeconds: 3600, changeSeconds: 3600, changePercent: 100,
+    activeDays: 3, averageSeconds: 2400, goalDays: 1,
+  });
+  assert.equal(breakdown.week.totalSeconds, 7200);
+  assert.equal(breakdown.month.start, "2026-10-01");
+  assert.equal(breakdown.month.totalSeconds, 3600);
+});
+
+test("insights distinguish an empty baseline, a decrease, and a disabled goal", () => {
+  const empty = summarize(emptyData(), { today: "2026-10-02", dailyGoalMinutes: 0 });
+  assert.equal(empty.insights.changePercent, null);
+  assert.equal(empty.insights.averageSeconds, 0);
+  assert.equal(empty.insights.goalDays, null);
+  assert.deepEqual(empty.breakdown.week.projects, []);
+  const data = applyChanges(emptyData(), [change("2026-09-25", 7200), change("2026-10-02", 3600)]);
+  const result = summarize(data, { today: "2026-10-02" });
+  assert.equal(result.insights.changePercent, -50);
+  assert.equal(result.insights.changeSeconds, -3600);
+  assert.equal(result.insights.goalDays, 1);
+  const none = summarize(data, { today: "2026-10-02", projectId: "missing" });
+  assert.equal(none.insights.activeDays, 0);
+  assert.equal(none.insights.changePercent, null);
+  assert.deepEqual(none.breakdown.month.projects, []);
+});
+
+test("project breakdowns sort by duration, retain separate project IDs, and follow filters", () => {
+  const data = applyChanges(emptyData(), [
+    change("2026-09-28", 4000), change("2026-10-02", 1000),
+    change("2026-10-02", 2000, { projectId: "other", projectName: "Project" }),
+    change("2026-10-01", 2000, { projectId: "another", projectName: "Another" }),
+    change("2026-10-02", 0, { projectId: "edits", projectName: "Edits only", characters: 2 }),
+  ]);
+  const result = summarize(data, { today: "2026-10-02" });
+  assert.deepEqual(result.breakdown.week.projects, [
+    { id: "file:///project", name: "Project", seconds: 5000 },
+    { id: "another", name: "Another", seconds: 2000 },
+    { id: "other", name: "Project", seconds: 2000 },
+  ]);
+  assert.deepEqual(result.breakdown.month.projects.map((project) => project.seconds), [2000, 2000, 1000]);
+  const filtered = summarize(data, { today: "2026-10-02", projectId: "other", dailyGoalMinutes: 30 });
+  assert.equal(filtered.insights.averageSeconds, 2000);
+  assert.equal(filtered.insights.goalDays, 1);
+  assert.equal(filtered.breakdown.week.totalSeconds, 2000);
+  assert.deepEqual(filtered.breakdown.week.projects, [{ id: "other", name: "Project", seconds: 2000 }]);
+  assert.equal(filtered.projects.length, 4);
+});
+
+test("weekly comparisons respect Sunday starts and local DST calendar boundaries", () => {
+  inTimezone("America/New_York", () => {
+    const data = applyChanges(emptyData(), [
+      change("2026-03-01", 60), change("2026-03-02", 60), change("2026-03-03", 600),
+      change("2026-03-08", 120), change("2026-03-09", 120),
+    ]);
+    const { insights } = summarize(data, { today: "2026-03-09", weekStartsOn: 0 });
+    assert.equal(insights.start, "2026-03-08");
+    assert.equal(insights.comparisonStart, "2026-03-01");
+    assert.equal(insights.comparisonEnd, "2026-03-02");
+    assert.equal(insights.changePercent, 100);
+  });
+});
+
+test("breakdown date ranges cross years and preserve subsecond activity", () => {
+  const data = applyChanges(emptyData(), [change("2025-12-25", 0.25), change("2025-12-29", 1), change("2026-01-01", 0.5)]);
+  const { insights, breakdown } = summarize(data, { today: "2026-01-01" });
+  assert.equal(insights.start, "2025-12-29");
+  assert.equal(insights.comparisonEnd, "2025-12-25");
+  assert.equal(insights.changePercent, 500);
+  assert.equal(breakdown.week.totalSeconds, 1.5);
+  assert.equal(breakdown.month.totalSeconds, 0.5);
+  assert.equal(breakdown.month.projects[0].seconds, 0.5);
+});
+
 test("project filters affect every metric while keeping all available projects", () => {
   const data = applyChanges(emptyData(), [
     change("2026-10-01", 1000, { file: { id: "file:///project/index.js", path: "index.js" } }),

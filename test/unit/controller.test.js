@@ -90,6 +90,36 @@ test("activation does not create activity; edits count Unicode characters and up
   assert.deepEqual(f.errors, []);
 });
 
+test("dashboard snapshots refresh insights and breakdowns when filters change or history is cleared", async (t) => {
+  const f = await fixture(t, { now: new Date(2026, 9, 2, 12).getTime() });
+  await f.controller.store.append([
+    { date: "2026-09-25", seconds: 1800, projectId: "app", projectName: "App" },
+    { date: "2026-09-28", seconds: 3600, projectId: "app", projectName: "App" },
+    { date: "2026-10-02", seconds: 1800, projectId: "docs", projectName: "Docs" },
+  ]);
+  await f.controller.flush();
+  await f.commands.get("devstreak.openActivity")();
+  await f.controller.handleMessage({ type: "ready" });
+  let message = f.messages.at(-1);
+  assert.equal(message.insights.changePercent, 200);
+  assert.equal(message.breakdown.week.projects.length, 2);
+  assert.equal(message.breakdown.month.totalSeconds, 1800);
+  await f.controller.handleMessage({ type: "filter", projectId: "docs" });
+  message = f.messages.at(-1);
+  assert.equal(message.insights.changePercent, null);
+  assert.equal(message.insights.averageSeconds, 1800);
+  assert.deepEqual(message.breakdown.week.projects, [{ id: "docs", name: "Docs", seconds: 1800 }]);
+  await f.controller.handleMessage({ type: "filter", projectId: "" });
+  assert.equal(f.messages.at(-1).breakdown.week.totalSeconds, 5400);
+  f.vscode.window.showWarningMessage = async () => "Clear history";
+  await f.controller.clearHistory();
+  message = f.messages.at(-1);
+  assert.equal(message.insights.activeDays, 0);
+  assert.equal(message.insights.changePercent, null);
+  assert.deepEqual(message.breakdown.week.projects, []);
+  assert.deepEqual(message.breakdown.month.projects, []);
+});
+
 test("focus loss, pause, excluded folders, background edits and empty events do not accrue activity", async (t) => {
   const f = await fixture(t);
   f.edit("x");

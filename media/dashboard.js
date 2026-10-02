@@ -11,17 +11,21 @@
     viewedMonth: isDateKey(saved.viewedMonth) ? saved.viewedMonth.slice(0, 7) + "-01" : "",
     mode: saved.mode === "year" ? "year" : "month",
     projectId: typeof saved.projectId === "string" ? saved.projectId : "",
+    breakdownPeriod: saved.breakdownPeriod === "month" ? "month" : "week",
   };
   let snapshot;
   let calendarKey = "";
   let projectsKey = "";
   let filesKey = "";
+  let breakdownKey = "";
   const dateButtons = new Map();
   const monthTotals = new Map();
   const byId = (id) => document.getElementById(id);
   const fullDateFormatter = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
   const monthFormatter = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" });
   const numberFormatter = new Intl.NumberFormat();
+  const percentFormatter = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 });
+  const shortDateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
 
   function isDateKey(value) {
     if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -275,12 +279,68 @@
     renderFiles(files);
   }
 
+  function dateRange(start, end) {
+    return `${shortDateFormatter.format(parseDate(start))} – ${shortDateFormatter.format(parseDate(end))}`;
+  }
+
+  function renderInsights() {
+    const insights = snapshot.insights;
+    if (!insights) return;
+    const project = snapshot.projects.find((item) => item.id === state.projectId);
+    setText("insights-context", `${dateRange(insights.start, insights.end)} · ${project ? project.name : "All projects"}`);
+    const change = insights.changePercent;
+    const changeText = change === null ? "No baseline" : change === 0 ? "No change" : `${percentFormatter.format(Math.abs(change) / 100)} ${change > 0 ? "more" : "less"}`;
+    setText("week-change", changeText);
+    const difference = Math.abs(insights.changeSeconds);
+    setText("week-comparison", change === null ? "No active time in the comparison period" : difference === 0 ? "Same active time as last week" : `${difference < 1 ? "<1s" : duration(difference)} ${insights.changeSeconds > 0 ? "more" : "less"} active time`);
+    setText("week-average", insights.averageSeconds > 0 && insights.averageSeconds < 1 ? "<1s" : duration(insights.averageSeconds));
+    setText("week-active-days", `${insights.activeDays} active ${insights.activeDays === 1 ? "day" : "days"} this week`);
+    setText("week-goal-days", insights.goalDays === null ? "Off" : `${insights.goalDays} ${insights.goalDays === 1 ? "day" : "days"}`);
+    setText("week-goal-context", insights.goalDays === null ? "Enable a daily goal in Settings" : `${duration(snapshot.summary.goalSeconds)} daily target`);
+    setText("insights-note", `Compared with ${dateRange(insights.comparisonStart, insights.comparisonEnd)} (the same weekdays). Goal days use your current target.`);
+  }
+
+  function renderBreakdown() {
+    const period = snapshot.breakdown?.[state.breakdownPeriod];
+    if (!period) return;
+    const project = snapshot.projects.find((item) => item.id === state.projectId);
+    setText("breakdown-context", `${dateRange(period.start, period.end)} · ${project ? project.name : "All projects"}`);
+    for (const name of ["week", "month"]) byId(`breakdown-${name}`).setAttribute("aria-pressed", String(name === state.breakdownPeriod));
+    const signature = JSON.stringify([state.breakdownPeriod, period.projects, period.totalSeconds]);
+    if (signature !== breakdownKey) {
+      breakdownKey = signature;
+      const rows = period.projects.map((project) => {
+        const row = element("li", "project-time-row");
+        const heading = element("div", "project-time-heading");
+        const name = element("span", "project-time-name", project.name);
+        name.title = project.id;
+        const time = project.seconds > 0 && project.seconds < 1 ? "<1s" : duration(project.seconds);
+        const share = percentFormatter.format(period.totalSeconds > 0 ? project.seconds / period.totalSeconds : 0);
+        heading.append(name, element("span", "project-time-value", `${time} · ${share}`));
+        const bar = element("meter", "project-time-bar");
+        bar.min = 0;
+        bar.max = period.totalSeconds || 1;
+        bar.value = project.seconds;
+        bar.setAttribute("aria-label", `${project.name} active time`);
+        bar.setAttribute("aria-valuetext", `${time}, ${share} of active time`);
+        row.append(heading, bar);
+        return row;
+      });
+      byId("project-breakdown").replaceChildren(...rows);
+    }
+    byId("breakdown-empty").hidden = period.projects.length > 0;
+    const total = period.totalSeconds > 0 && period.totalSeconds < 1 ? "<1s" : duration(period.totalSeconds);
+    setText("breakdown-total", `${total} total · ${period.projects.length} ${period.projects.length === 1 ? "project" : "projects"} with active time`);
+  }
+
   function render() {
     if (!snapshot) return;
     renderSummary();
     renderProjects();
     renderCalendar();
     renderDetails();
+    renderInsights();
+    renderBreakdown();
     byId("dashboard").setAttribute("aria-busy", "false");
   }
 
@@ -356,6 +416,11 @@
     state.projectId = event.target.value;
     persist();
     send("filter", { projectId: state.projectId });
+  });
+  for (const period of ["week", "month"]) byId(`breakdown-${period}`).addEventListener("click", () => {
+    state.breakdownPeriod = period;
+    persist();
+    if (snapshot) renderBreakdown();
   });
   byId("pause-button").addEventListener("click", () => send("togglePause"));
   byId("settings-button").addEventListener("click", () => send("settings"));

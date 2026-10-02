@@ -149,6 +149,32 @@ function shiftDate(key, offset) {
   return localDateKey(date);
 }
 
+function periodActivity(data, start, end, projectId, goalSeconds, names) {
+  let totalSeconds = 0;
+  let activeDays = 0;
+  let goalDays = goalSeconds > 0 ? 0 : null;
+  const projects = new Map();
+  for (const [date, day] of Object.entries(data.days)) {
+    if (date < start || date > end) continue;
+    let daySeconds = 0;
+    for (const [id, project] of Object.entries(day.projects)) {
+      if (projectId && id !== projectId) continue;
+      daySeconds += project.time;
+      if (project.time > 0) projects.set(id, (projects.get(id) || 0) + project.time);
+    }
+    totalSeconds += daySeconds;
+    if (daySeconds > 0) activeDays++;
+    if (goalSeconds > 0 && daySeconds >= goalSeconds) goalDays++;
+  }
+  return {
+    start, end, totalSeconds, activeDays,
+    averageSeconds: activeDays ? totalSeconds / activeDays : 0,
+    goalDays,
+    projects: [...projects].map(([id, seconds]) => ({ id, name: names.get(id), seconds }))
+      .sort((a, b) => b.seconds - a.seconds || a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+  };
+}
+
 function summarize(data, options = {}) {
   const today = options.today || localDateKey();
   const todayDate = parseLocalDate(today);
@@ -190,16 +216,30 @@ function summarize(data, options = {}) {
     cursor = shiftDate(cursor, -1);
   }
   const weekStart = shiftDate(today, -((todayDate.getDay() - weekStartsOn + 7) % 7));
-  const weekSeconds = Object.entries(days).reduce((total, [date, day]) => total + (date >= weekStart && date <= today ? day.time : 0), 0);
+  const goalSeconds = dailyGoalMinutes * 60;
+  const week = periodActivity(data, weekStart, today, projectId, goalSeconds, projects);
+  // Compare the same weekdays, rather than a partial week with seven full days.
+  const comparison = periodActivity(data, shiftDate(weekStart, -7), shiftDate(today, -7), projectId, goalSeconds, projects);
+  const month = periodActivity(data, today.slice(0, 7) + "-01", today, projectId, goalSeconds, projects);
+  const changeSeconds = week.totalSeconds - comparison.totalSeconds;
   return {
     days,
     projects: [...projects].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id)),
+    insights: {
+      start: weekStart, end: today,
+      comparisonStart: comparison.start, comparisonEnd: comparison.end,
+      previousSeconds: comparison.totalSeconds,
+      changeSeconds,
+      changePercent: comparison.totalSeconds > 0 ? changeSeconds / comparison.totalSeconds * 100 : null,
+      activeDays: week.activeDays, averageSeconds: week.averageSeconds, goalDays: week.goalDays,
+    },
+    breakdown: { week, month },
     summary: {
       todaySeconds: days[today]?.time || 0,
-      weekSeconds,
+      weekSeconds: week.totalSeconds,
       currentStreak,
       longestStreak,
-      goalSeconds: dailyGoalMinutes * 60,
+      goalSeconds,
       qualifyingSeconds,
     },
   };

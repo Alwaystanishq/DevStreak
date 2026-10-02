@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add weekly insights with comparisons against matching weekdays last week, average time per active day, and daily goal counts, plus project time breakdowns for this week and month that follow the project filter.
 - Rebuild the dashboard with today/week/streak/goal summaries, weekday-aligned month and year calendars, activity intensity, project filters, and detailed file groups.
 - Add keyboard calendar navigation, responsive layouts, theme support, and persistent selection and view state.
 - Track active editor time with idle detection, VS Code inactive-window signals, focus handling, pause/resume, sleep-gap protection, and local-midnight/DST boundaries. Show Idle in the status bar while the timer is stopped.

@@ -7,6 +7,8 @@ DevStreak is a local-only VS Code extension for understanding your coding habits
 Click the stopwatch in the status bar or run **DevStreak: Open Activity** from the Command Palette. On first opening, the dashboard shows the current month with today selected. While the tab remains open, switching away and back restores your selected date, calendar view, and project filter.
 
 - See today's active time, this week's total, your current and longest streak, and daily goal progress.
+- Review weekly insights: active time compared with the same weekdays last week, average time per active day, and days meeting your current daily goal.
+- See each project's duration and share of active time for this week or this month, through today. The breakdown period is remembered while the dashboard tab remains open.
 - Navigate between months or switch to a compact year overview.
 - Select a date for its precise duration, character count, and edited files grouped by project.
 - Filter the dashboard by project. The status bar always shows the total across all projects.
@@ -37,7 +39,9 @@ Dates follow the extension host's local timezone. Sessions crossing midnight are
 
 A streak day must meet the configured minimum active time: **15 minutes** by default. The current streak remains visible through today while you work toward that minimum; a missed previous day breaks it. The activity colors represent active time rather than character counts. For a streak threshold of `T` minutes, the levels are no active time, under `T`, `T` to under `2T`, `2T` to under `4T`, and `4T` or more. Exact thresholds appear in the legend tooltips. Empty records do not count as active days.
 
-Project filters apply to calendar details, streaks, weekly totals, and goal progress. The status bar and data exports always include all projects.
+Project filters apply to calendar details, streaks, weekly totals, goal progress, weekly insights, and project breakdowns. The status bar and data exports always include all projects.
+
+Weekly comparisons respect your configured week start and compare the same elapsed weekdays in each week. An empty previous period shows **No baseline**. Average time uses only days with positive active time; edits without active time do not count as active days or appear in the time breakdown. Goal days are calculated using your current target, so changing it updates historical goal counts; disabling the goal shows **Off**. Insight and breakdown date ranges follow the current local day independently of calendar navigation.
 
 ## Settings
 

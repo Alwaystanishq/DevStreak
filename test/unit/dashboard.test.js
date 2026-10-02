@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { dashboardFixture, webviewHTML } = require("../helpers/dashboard-fixture");
+const { emptyData, applyChanges, summarize } = require("../../src/model");
 
 function snapshot(overrides = {}) {
   return {
@@ -14,6 +15,80 @@ function snapshot(overrides = {}) {
     ...overrides,
   };
 }
+
+function activitySnapshot(changes = [], options = {}) {
+  const data = applyChanges(emptyData(), changes.map(([date, seconds, projectId = "app", projectName = "app"]) =>
+    ({ date, seconds, projectId, projectName })));
+  return snapshot({ ...summarize(data, { today: "2026-10-02", ...options }), projectId: options.projectId || "" });
+}
+
+test("weekly insights and project shares render live model calculations", () => {
+  const ui = dashboardFixture();
+  ui.receive(activitySnapshot([
+    ["2026-09-25", 1800], ["2026-09-28", 3600], ["2026-10-02", 1800, "docs", "Docs"],
+  ]));
+  assert.equal(ui.document.getElementById("week-change").textContent, "200% more");
+  assert.equal(ui.document.getElementById("week-comparison").textContent, "1h 0m more active time");
+  assert.equal(ui.document.getElementById("week-average").textContent, "45m");
+  assert.equal(ui.document.getElementById("week-active-days").textContent, "2 active days this week");
+  assert.equal(ui.document.getElementById("week-goal-days").textContent, "1 day");
+  const rows = ui.document.querySelectorAll(".project-time-row");
+  assert.equal(rows.length, 2);
+  assert.ok(rows[0].textContent.includes("1h 0m · 66.7%"));
+  assert.equal(rows[0].querySelector("meter").value, 3600);
+  assert.equal(rows[0].querySelector("meter").max, 5400);
+  assert.equal(rows[0].querySelector("meter").getAttribute("aria-valuetext"), "1h 0m, 66.7% of active time");
+  assert.ok(ui.document.getElementById("insights-note").textContent.includes("Sep 21, 2026 – Sep 25, 2026"));
+});
+
+test("project period switching restores selection and uses distinct week and month totals", () => {
+  const ui = dashboardFixture({ breakdownPeriod: "month" });
+  const data = activitySnapshot([["2026-09-28", 3600], ["2026-10-02", 1800, "docs", "Docs"]]);
+  ui.receive(data);
+  assert.equal(ui.document.getElementById("breakdown-month").getAttribute("aria-pressed"), "true");
+  assert.equal(ui.document.querySelectorAll(".project-time-row").length, 1);
+  assert.ok(ui.document.getElementById("breakdown-total").textContent.startsWith("30m total"));
+  ui.click("breakdown-week");
+  assert.equal(ui.state.breakdownPeriod, "week");
+  assert.equal(ui.document.querySelectorAll(".project-time-row").length, 2);
+  assert.ok(ui.document.getElementById("breakdown-total").textContent.startsWith("1h 30m total"));
+  assert.deepEqual(ui.messages, [{ type: "ready" }]);
+  const first = ui.document.querySelector(".project-time-row");
+  ui.receive(data);
+  assert.equal(ui.document.querySelector(".project-time-row"), first);
+});
+
+test("empty analytics, disabled goals, decreases and filter changes display accurately", () => {
+  const ui = dashboardFixture();
+  ui.receive(activitySnapshot([], { dailyGoalMinutes: 0 }));
+  assert.equal(ui.document.getElementById("week-change").textContent, "No baseline");
+  assert.equal(ui.document.getElementById("week-average").textContent, "0m");
+  assert.equal(ui.document.getElementById("week-goal-days").textContent, "Off");
+  assert.equal(ui.document.getElementById("breakdown-empty").hidden, false);
+  const changes = [["2026-09-25", 3600], ["2026-10-02", 1800], ["2026-10-02", 3600, "docs", "Docs"]];
+  ui.receive(activitySnapshot(changes, { projectId: "app" }));
+  assert.equal(ui.document.getElementById("week-change").textContent, "50% less");
+  assert.equal(ui.document.getElementById("week-average").textContent, "30m");
+  assert.equal(ui.document.getElementById("breakdown-empty").hidden, true);
+  assert.equal(ui.document.querySelectorAll(".project-time-row").length, 1);
+  assert.ok(ui.document.querySelector(".project-time-row").textContent.includes("100%"));
+  assert.ok(ui.document.getElementById("insights-context").textContent.endsWith("· app"));
+  ui.receive(activitySnapshot(changes, { projectId: "docs" }));
+  assert.equal(ui.document.getElementById("week-change").textContent, "No baseline");
+  assert.ok(ui.document.querySelector(".project-time-row").textContent.includes("Docs"));
+});
+
+test("project chart treats hostile names as text and preserves subsecond shares", () => {
+  const ui = dashboardFixture();
+  const name = "<img src=x onerror=alert(1)>";
+  ui.receive(activitySnapshot([["2026-10-02", 0.5, "app", name]]));
+  const chart = ui.document.getElementById("project-breakdown");
+  assert.ok(chart.textContent.includes(name));
+  assert.ok(chart.textContent.includes("<1s · 100%"));
+  assert.equal(chart.querySelectorAll("img").length, 0);
+  assert.equal(chart.querySelector("meter").max, 0.5);
+  assert.equal(ui.document.getElementById("week-average").textContent, "<1s");
+});
 
 test("dashboard starts on today with weekday-aligned dates, summaries, and disabled future days", () => {
   const ui = dashboardFixture();

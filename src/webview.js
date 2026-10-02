@@ -120,6 +120,30 @@ function getWebviewHTML(webview, extensionUri) {
       </div>
     </section>
 
+    <section class="analytics-grid" aria-label="Activity insights">
+      <article class="analytics-panel" aria-labelledby="insights-title">
+        <div class="section-heading"><h2 id="insights-title">Weekly insights</h2><p id="insights-context">This week through today.</p></div>
+        <dl class="insight-metrics">
+          <div><dt>Compared with last week</dt><dd><span id="week-change">—</span><p id="week-comparison" class="insight-caption"></p></dd></div>
+          <div><dt>Average per active day</dt><dd><span id="week-average">—</span><p id="week-active-days" class="insight-caption"></p></dd></div>
+          <div><dt>Days meeting your goal</dt><dd><span id="week-goal-days">—</span><p id="week-goal-context" class="insight-caption"></p></dd></div>
+        </dl>
+        <p class="analytics-note" id="insights-note">Compare the same weekdays in each week.</p>
+      </article>
+      <article class="analytics-panel" aria-labelledby="breakdown-title">
+        <div class="breakdown-toolbar">
+          <div class="section-heading"><h2 id="breakdown-title">Project breakdown</h2><p id="breakdown-context">Active time by project.</p></div>
+          <div class="view-switch" role="group" aria-label="Project breakdown period">
+            <button type="button" id="breakdown-week" aria-pressed="true">This week</button>
+            <button type="button" id="breakdown-month" aria-pressed="false">This month</button>
+          </div>
+        </div>
+        <ul class="project-breakdown" id="project-breakdown" aria-label="Project active time"></ul>
+        <p class="empty-breakdown" id="breakdown-empty" hidden>No active time recorded in this period. Your next session will appear here.</p>
+        <p class="analytics-note" id="breakdown-total"></p>
+      </article>
+    </section>
+
     <footer class="page-footer"><span>Saved on this device.</span><span>Reading and thinking count while your session is active.</span></footer>
     <p class="screen-reader-only" id="calendar-announcement" aria-live="polite"></p>
   </main>
