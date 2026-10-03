@@ -24,6 +24,9 @@ class ActivityController {
     this.stopped = false;
     this.maintenance = false;
     this.lastError = "";
+    this.saveError = "";
+    this.saveInProgress = false;
+    this.hasHistory = false;
     this.recoveryRequired = false;
     /** @type {NonNullable<import('./types').SummaryOptions['dayCache']>} */
     this.dayCache = new WeakMap();
@@ -59,7 +62,7 @@ class ActivityController {
       legacyData: context.globalState.get("devstreakData", {}),
     });
     try {
-      this.data = await this.storageResult(() => this.store.init());
+      this.setData(await this.storageResult(() => this.store.init()));
     } catch (error) {
       if (error.code !== "INVALID_STORAGE") throw error;
       this.recoveryRequired = true;
@@ -75,6 +78,7 @@ class ActivityController {
         if (this.maintenance) return;
         this.pending.push(change);
         this.data = applyChanges(this.data, [change]);
+        if (change.seconds > 0 || change.characters > 0 || change.file) this.hasHistory = true;
       },
     });
     this.tracker.setPaused(this.paused || this.recoveryRequired);
@@ -168,15 +172,37 @@ class ActivityController {
     this.render();
   }
 
+  /** @param {import('./types').ActivityData} data */
+  setData(data) {
+    this.data = data;
+    this.hasHistory = false;
+    for (const date in data.days) {
+      for (const project of Object.values(data.days[date].projects)) {
+        if (project.time > 0 || project.characters > 0 || Object.keys(project.files).length) {
+          this.hasHistory = true;
+          return;
+        }
+      }
+    }
+  }
+
   async storageResult(operation) {
+    this.saveInProgress = true;
+    this.render();
     try {
-      return await operation();
+      const data = await operation();
+      this.saveError = "";
+      return data;
     } catch (error) {
+      this.saveError = error?.message || String(error);
       // Startup and reads can also succeed before failing to release a lock.
       // Preserve that result and allow the store to retry just the cleanup.
       if (!error.committedData) throw error;
       this.reportError(error);
       return error.committedData;
+    } finally {
+      this.saveInProgress = false;
+      this.render();
     }
   }
 
@@ -188,7 +214,8 @@ class ActivityController {
     this.flushing = (async () => {
       try {
         const saved = await this.store.append(batch);
-        this.data = applyChanges(saved, this.pending);
+        this.setData(applyChanges(saved, this.pending));
+        this.saveError = "";
         this.lastError = "";
       } catch (error) {
         if (error instanceof StaleGenerationError) {
@@ -196,22 +223,23 @@ class ActivityController {
           this.pending = [];
           this.tracker.setPaused(true);
           this.pending = [];
-          this.data = await this.storageResult(() => this.store.read());
+          this.setData(await this.storageResult(() => this.store.read()));
           this.tracker.setPaused(this.paused || this.maintenance || this.stopping || this.recoveryRequired);
         } else if (error.committedData) {
           // The write succeeded but releasing the file lock failed. Retrying
           // this batch would count it twice; storage retries just the unlock.
-          this.data = applyChanges(error.committedData, this.pending);
+          this.setData(applyChanges(error.committedData, this.pending));
+          this.saveError = error?.message || String(error);
           this.reportError(error);
         } else {
           this.pending.unshift(...batch);
+          this.saveError = error?.message || String(error);
           throw error;
         }
-      } finally {
-        this.render();
       }
     })();
-    try { await this.flushing; } finally { this.flushing = null; }
+    this.render();
+    try { await this.flushing; } finally { this.flushing = null; this.render(); }
   }
 
   /** @returns {import('./types').DashboardSnapshot} */
@@ -230,6 +258,10 @@ class ActivityController {
     return { type: "snapshot", today, status: this.tracker.status(), paused: this.paused,
       projectId: this.projectId, weekStartsOn: this.config.weekStartsOn, ...all,
       selectedDate, recoveryRequired: this.recoveryRequired, storageError: this.lastError,
+      hasHistory: this.hasHistory,
+      saveStatus: this.recoveryRequired ? "error" : this.flushing || this.saveInProgress ? "saving"
+        : this.saveError ? "error" : this.pending.length ? "saving" : "saved",
+      saveError: this.saveError,
       report: this.reportRange ? summarizeRange(this.data, this.reportRange.start, this.reportRange.end,
         { ...this.config, today, projectId: this.projectId }) : null };
   }
@@ -243,7 +275,7 @@ class ActivityController {
     const suffix = status === "paused" ? " · Paused" : status === "idle" ? " · Idle" : "";
     this.statusBar.text = this.recoveryRequired ? "$(warning) DevStreak · Recovery needed" : icon + " " + formatDuration(total) + suffix;
     this.statusBar.tooltip = "DevStreak · " + status + "\nToday: " + formatDuration(total)
-      + "\nOpen activity, goals, and tracking controls." + (this.lastError ? "\nSave error: " + this.lastError : "");
+      + "\nOpen activity, goals, and tracking controls." + (this.saveError ? "\nSave error: " + this.saveError : "");
     this.statusBar.accessibilityInformation = { label: this.statusBar.tooltip };
     if (this.panel?.visible && this.panelReady) {
       this.sendSnapshot();
@@ -297,6 +329,14 @@ class ActivityController {
 
   async handleMessage(message) {
     if (!message || typeof message !== "object" || this.stopping) return;
+    if (message.type === "retrySave") {
+      if (!this.maintenance && !this.recoveryRequired) await this.flush();
+      return;
+    }
+    if (message.type === "setDailyGoal") {
+      await this.vscode.commands.executeCommand("workbench.action.openSettings", "devstreak.dailyGoalMinutes");
+      return;
+    }
     if (message.type === "ready") { this.panelReady = true; this.lastSnapshot = null; this.render(); return; }
     if (message.type === "selectDate") {
       if (isDateKey(message.date) && message.date <= localDateKey(new Date(this.now()))) {
@@ -392,14 +432,8 @@ class ActivityController {
     try {
       await this.flush();
       if (this.pending.length) await this.flush();
-      try {
-        this.data = this.recoveryRequired ? await this.store.recover(backup || emptyData())
-          : backup ? await this.store.replace(backup) : await this.store.clear();
-      } catch (error) {
-        if (!error.committedData) throw error;
-        this.data = error.committedData;
-        this.reportError(error);
-      }
+      this.setData(await this.storageResult(() => this.recoveryRequired ? this.store.recover(backup || emptyData())
+        : backup ? this.store.replace(backup) : this.store.clear()));
       this.pending = [];
       this.recoveryRequired = false;
       this.lastError = "";
@@ -425,7 +459,7 @@ class ActivityController {
     this.maintenance = true;
     try {
       await this.flush();
-      this.data = await this.storageResult(() => this.store.init());
+      this.setData(await this.storageResult(() => this.store.init()));
       this.pending = [];
       this.recoveryRequired = false;
       this.lastError = "";

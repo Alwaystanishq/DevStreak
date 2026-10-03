@@ -48,6 +48,15 @@ function getWebviewHTML(webview, extensionUri) {
       <p id="storage-error"></p>
       <button class="button secondary" id="recover-button" type="button">Recover history</button>
     </section>
+    <section class="onboarding" id="onboarding" aria-labelledby="onboarding-title" hidden>
+      <div>
+        <h2 id="onboarding-title">Your first session starts here</h2>
+        <p>Open a file, then type, move the cursor, or scroll to start tracking. Reading and thinking count between editor interactions until tracking becomes idle.</p>
+        <p id="onboarding-paused" hidden>Tracking is paused. Use Resume above when you are ready.</p>
+      </div>
+      <button class="button secondary" id="daily-goal-button" type="button">Set daily goal</button>
+    </section>
+
     <section class="summary-grid" aria-label="Activity summary">
       <article class="summary-card">
         <h2>Today</h2>
@@ -188,7 +197,14 @@ function getWebviewHTML(webview, extensionUri) {
       </div>
     </section>
 
-    <footer class="page-footer"><span>Saved on this device.</span><span>Reading and thinking count while your session is active.</span></footer>
+    <footer class="page-footer">
+      <div class="save-state" id="save-state">
+        <span id="save-status" role="status" aria-live="polite">Connecting…</span>
+        <button class="button secondary" id="retry-save-button" type="button" hidden>Retry save</button>
+        <span class="save-error" id="save-error" hidden></span>
+      </div>
+      <span>Reading and thinking count while your session is active.</span>
+    </footer>
     <p class="screen-reader-only" id="calendar-announcement" aria-live="polite"></p>
   </main>
   <script nonce="${nonce}" src="${scriptUri}"></script>

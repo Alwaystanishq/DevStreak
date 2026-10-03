@@ -50,6 +50,7 @@ export interface DashboardSnapshot extends SummaryResult {
   type: 'snapshot'; today: string; status: 'tracking' | 'idle' | 'paused'; paused: boolean;
   projectId: string; weekStartsOn: number; selectedDate: string; recoveryRequired: boolean;
   storageError: string; report: RangeReport | null; revision?: number;
+  saveStatus: 'saving' | 'saved' | 'error'; saveError: string; hasHistory: boolean;
 }
 export type DashboardPatch = Omit<DashboardSnapshot, 'type'> & {
   type: 'patch'; baseRevision: number; revision: number; removedDays: string[];
@@ -60,7 +61,7 @@ export type DashboardRequest =
   | { type: 'filter'; projectId: string }
   | { type: 'selectDate'; date: string }
   | { type: 'report'; start: string; end: string }
-  | { type: 'togglePause' | 'settings' | 'exportJson' | 'exportCsv' | 'importJson' | 'clearHistory' | 'recoverHistory' };
+  | { type: 'togglePause' | 'settings' | 'setDailyGoal' | 'retrySave' | 'exportJson' | 'exportCsv' | 'importJson' | 'clearHistory' | 'recoverHistory' };
 export interface TrackerContext {
   focused: boolean; active: boolean; eligible: boolean;
   projectId: string; projectName: string; languageId?: string;

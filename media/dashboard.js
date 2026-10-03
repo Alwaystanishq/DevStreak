@@ -2,8 +2,7 @@
 (() => {
   "use strict";
 
-  // Host contract: ready/filter/togglePause/settings/exportJson/exportCsv/importJson/
-  // clearHistory go out; complete, project-filtered `snapshot` messages come in.
+  // DashboardRequest actions go out; revisioned DashboardMessage updates come in.
   const vscode = acquireVsCodeApi();
   const saved = vscode.getState() || {};
   const state = {
@@ -145,6 +144,21 @@
     filter.value = state.projectId;
     const project = projects.find((item) => item.id === state.projectId);
     setText("calendar-description", project ? `Activity in ${project.name}.` : "Your activity across all projects.");
+  }
+
+  function renderSaveStatus() {
+    const status = snapshot.saveStatus || "saved";
+    byId("save-state").className = `save-state ${status}`;
+    setText("save-status", snapshot.recoveryRequired ? "History needs recovery."
+      : status === "saving" ? "Saving…" : status === "error" ? "Save failed." : "Saved on this device.");
+    byId("retry-save-button").hidden = status !== "error" || Boolean(snapshot.recoveryRequired);
+    byId("save-error").hidden = status !== "error" || !snapshot.saveError || Boolean(snapshot.recoveryRequired);
+    setText("save-error", snapshot.saveError || "");
+    const onboarding = byId("onboarding");
+    const showOnboarding = snapshot.hasHistory === false && !snapshot.recoveryRequired;
+    if (!showOnboarding && onboarding.contains(document.activeElement)) byId("settings-button").focus();
+    onboarding.hidden = !showOnboarding;
+    byId("onboarding-paused").hidden = !snapshot.paused;
   }
 
   function makeMonth(year, month, compact) {
@@ -449,6 +463,7 @@
   function render() {
     if (!snapshot) return;
     renderSummary();
+    renderSaveStatus();
     renderProjects();
     renderCalendar();
     renderDetails();
@@ -563,6 +578,8 @@
   byId("recover-button").addEventListener("click", () => send("recoverHistory"));
   byId("pause-button").addEventListener("click", () => send("togglePause"));
   byId("settings-button").addEventListener("click", () => send("settings"));
+  byId("daily-goal-button").addEventListener("click", () => send("setDailyGoal"));
+  byId("retry-save-button").addEventListener("click", () => send("retrySave"));
   for (const button of document.querySelectorAll("button[data-action]")) button.addEventListener("click", () => {
     byId("data-menu").open = false;
     byId("data-menu").querySelector("summary").focus();
