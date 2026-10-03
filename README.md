@@ -1,120 +1,165 @@
 # DevStreak
 
-DevStreak is a local-only VS Code extension for understanding your coding habits. It tracks active editor time, characters added, and files edited, with a live calendar, streaks, and an optional daily goal.
+**Understand your coding habits, one session at a time.**
 
-## Getting started
+DevStreak is a VS Code extension that tracks active editor time, characters added, and files edited. See your progress in a live activity calendar, build a streak, and work toward a daily goal. Activity stays in VS Code's extension storage, with no account or external service required.
 
-Click the stopwatch in the status bar or run **DevStreak: Open Activity** from the Command Palette. On first opening, the dashboard shows the current month with today selected. While the tab remains open, switching away and back restores your selected date, calendar view, and project filter.
+Requires **VS Code 1.109 or later**.
 
-Before any activity is recorded, a welcome message explains how to start tracking and how reading time counts. **Set daily goal** opens the daily target setting directly. If tracking is paused, the message points you to **Resume**.
+## Quick start
 
-- See today's active time, this week's total, your current and longest streak, and daily goal progress.
-- Review weekly insights: active time compared with the same weekdays last week, average time per active day, and days meeting your current daily goal.
-- See each project's duration and share of active time for this week or this month, through today. The breakdown period is remembered while the dashboard tab remains open.
-- See each language's duration and share of active time for this week or this month, through today. Language breakdowns follow the project filter and remember their own period selection while the dashboard tab remains open.
-- Navigate between months or switch to a compact year overview.
-- Apply custom dates in **Date-range report** to review active time, active days, average duration, goal days, and project/language shares. Compare the result with the preceding period of the same length.
-- Select a date for its precise duration, character count, and edited files grouped by project.
-- Filter the dashboard by project. The status bar always shows the total across all projects.
-- Pause or resume tracking from the dashboard or the Command Palette.
-- Open **Settings** to adjust the idle timeout, goals, streak threshold, week start, and ignored folders.
-- Use **More** to back up history as JSON, export CSV, import a backup, or clear history. Import and clear require confirmation.
+1. Open a file and start working: type, move the cursor, scroll, or switch files to begin a session.
+2. Click the stopwatch in the status bar, or run **DevStreak: Open Activity** from the Command Palette.
+3. Use **Settings** to choose your daily goal, idle timeout, and streak threshold.
 
-## What is counted
+The dashboard opens on the current month with today selected. Before your first recorded activity, it explains how tracking works and offers **Set daily goal**, which opens that setting directly. Use **Pause** and **Resume** whenever you want to control tracking manually.
 
-Tracking starts after interaction with an eligible editor: editing text, changing the selection with the keyboard or mouse, scrolling, or switching files. Opening VS Code alone does not count as activity.
+## Explore your activity
 
-Active time continues between interactions up to the configured idle timeout, allowing time for reading and thinking. Counting stops when any of these conditions applies:
+| Feature | What you can see |
+| --- | --- |
+| Daily summary | Today's active time, this week's total, current and longest streaks, and daily goal progress. |
+| Activity calendar | Month and year views, intensity levels based on active time, and details for each date. |
+| Day details | Precise duration, characters added, and edited files grouped by project. |
+| Weekly insights | Comparison with the same weekdays last week, average time per active day, and days meeting your goal. |
+| Project breakdown | Each project's active time and share for this week or month. |
+| Language breakdown | Time and share by the editor's language mode, with its own week/month selection. |
+| Date-range report | Totals, active days, goal days, and project/language shares for any past or current date range, compared with the preceding period of the same length. |
 
-- VS Code reports the window inactive, even if it is still focused.
-- The window loses focus.
-- There has been no eligible editor interaction for the configured timeout.
-- The active editor is excluded or tracking is paused.
+The **Project** filter applies to dashboard summaries, calendar details, streaks, goals, and reports. The status bar and data exports always include all projects. Weekly and monthly breakdowns run through today, independently of the month you are viewing in the calendar.
 
-The default timeout is **5 minutes**, configurable with `devstreak.idleTimeoutMinutes`. VS Code's inactivity signal can stop counting sooner; the setting is a maximum grace period. While idle, the status bar and dashboard show **Idle**, and the timer stays frozen. Tracking resumes on eligible editor interaction without adding the elapsed idle period.
+Your selected date, calendar view, project filter, breakdown periods, and applied report dates are remembered while the dashboard tab remains open. The dashboard follows VS Code's theme and adapts to narrow editor groups.
 
-A gap of more than 15 seconds between timer ticks, such as computer sleep or a stalled extension host, is discarded. Opening VS Code, waking the computer, or restoring window focus alone does not start a session. Manual pause is saved for the current workspace and remains in effect when you reopen it.
+## How tracking works
 
-**Characters added** includes inserted text from typing, pasting, formatting, undo/redo, and other document changes in an eligible active editor while tracking is allowed. Changes while paused, inactive, or unfocused are excluded. Unicode code points are counted; this is an activity measure, not a count of keyboard presses or a productivity score. Deletions record a file edit without adding characters.
+### Active time
 
-Files are identified by their full URI and displayed with workspace-relative paths, so two files named `index.js` remain distinct. Local files, untitled documents, and remote editor files are eligible; output and preview documents are excluded. Files outside a workspace are grouped as **Other files**. This release tracks editor activity; terminal commands and debugger actions do not independently start or extend an editor session.
+A session begins after an interaction with an eligible editor. Reading and thinking between interactions count toward active time until tracking becomes idle.
 
-Dates follow the extension host's local timezone. Sessions crossing midnight are split between the correct calendar days, including daylight saving transitions. With remote development, the extension host and its storage may be on the remote machine.
+The default idle timeout is **5 minutes**. Tracking stops sooner if VS Code reports the window inactive or it loses focus. It also stops when you pause tracking or switch to an excluded editor. Returning to the window alone does not start a session; interact with the editor to resume. Idle time is never added back.
 
-A streak day must meet the configured minimum active time: **15 minutes** by default. The current streak remains visible through today while you work toward that minimum; a missed previous day breaks it. The activity colors represent active time rather than character counts. For a streak threshold of `T` minutes, the levels are no active time, under `T`, `T` to under `2T`, `2T` to under `4T`, and `4T` or more. Exact thresholds appear in the legend tooltips. Empty records do not count as active days.
+Local files, remote files, and untitled documents are eligible. The default excluded folders are `node_modules`, `.git`, `dist`, and `build`. Files outside a workspace appear under **Other files**. Terminal commands and debugger actions do not independently start or extend a session.
 
-Project filters apply to calendar details, streaks, weekly totals, goal progress, weekly insights, project breakdowns, and language breakdowns. The status bar and data exports always include all projects.
+Manual pause is remembered for the current workspace. Gaps longer than 15 seconds between timer ticks, such as computer sleep, are discarded.
 
-Language time follows the active editor's VS Code language mode, including untitled documents and custom languages. Switching files or changing language mode settles elapsed time under the previous language. Reading and thinking during the active grace period count toward that language; paused, idle, unfocused, and excluded activity follow the same rules as overall time. Earlier history appears as **Unknown language** because its original language cannot be reconstructed. Language shares use all active time in the selected period, including unknown time.
+### Characters, files, and languages
 
-Weekly comparisons respect your configured week start and compare the same elapsed weekdays in each week. An empty previous period shows **No baseline**. Average time uses only days with positive active time; edits without active time do not count as active days or appear in the time breakdown. Goal days are calculated using your current target, so changing it updates historical goal counts; disabling the goal shows **Off**. Insight and breakdown date ranges follow the current local day independently of calendar navigation. Custom reports use inclusive local calendar dates, follow the project filter, and compare the same number of calendar days immediately before the selected range. Empty comparison periods show **No baseline**. Applied report dates are remembered while the dashboard tab remains open.
+**Characters added** measures inserted Unicode code points, including typing, pasted text, formatting, undo/redo, and other changes in an eligible active editor. It is an activity measure, rather than a keystroke count. Deletions record a file edit without adding characters. Changes while paused, inactive, or unfocused are excluded.
+
+Edited files retain their full URI identity and display workspace-relative paths, so files with the same name remain distinct. Language time follows the active editor's language mode, including custom languages. Older records without language information appear as **Unknown language**.
+
+### Goals, streaks, and dates
+
+A streak day requires **15 minutes** of active time by default. If yesterday qualified, your current streak stays visible while you work toward today's threshold. A missed previous day breaks the streak. Calendar colors represent active time; hover over the legend to see the thresholds.
+
+The daily goal defaults to **60 minutes** and can be disabled by setting it to `0`. Historical goal-day counts use your current goal. Averages include only days with positive active time; edits alone do not make an active day. Comparisons show **No baseline** when the preceding period has no active time.
+
+Dates use the extension host's local timezone, and sessions crossing midnight are split between days. Date-range reports include both endpoints and compare the preceding range with the same number of calendar days. In remote development, the extension host's timezone and storage may be on the remote machine.
 
 ## Settings
 
-| Setting | Default | Purpose |
+Open **Settings** from the dashboard or run **DevStreak: Open Settings**. You can also configure these values in VS Code's user or workspace settings.
+
+| Setting | Default | Description |
 | --- | --- | --- |
-| `devstreak.idleTimeoutMinutes` | `5` | Maximum grace period after editor interaction; 1–60 minutes. Inactivity or loss of focus stops counting sooner. |
-| `devstreak.dailyGoalMinutes` | `60` | Daily target; set to `0` to disable it. |
-| `devstreak.streakMinimumMinutes` | `15` | Active time needed for a qualifying streak day. |
-| `devstreak.weekStartsOn` | `monday` | Calendar and weekly summaries can start Monday or Sunday. |
-| `devstreak.ignoredFolders` | `["node_modules", ".git", "dist", "build"]` | Excluded folder names or relative folder paths, such as `src/generated`. |
+| `devstreak.idleTimeoutMinutes` | `5` | Maximum time between editor interactions before becoming idle; accepts 1–60 minutes. Inactivity or loss of focus can stop tracking sooner. |
+| `devstreak.dailyGoalMinutes` | `60` | Daily active-time target; accepts 0–1440 minutes. Set to `0` to disable it. |
+| `devstreak.streakMinimumMinutes` | `15` | Active time needed for a streak day; accepts 1–1440 minutes. |
+| `devstreak.weekStartsOn` | `"monday"` | Start calendar weeks and weekly summaries on `"monday"` or `"sunday"`. |
+| `devstreak.ignoredFolders` | `["node_modules", ".git", "dist", "build"]` | Folder names or relative folder paths to exclude, such as `src/generated`. |
 
-Folder exclusions match complete path segments. Wildcards are not supported. Settings can be configured per workspace using VS Code's usual settings UI.
+Folder exclusions match complete path segments. Wildcards are not supported.
 
-## Privacy, storage, and backups
+## Privacy and saving
 
-DevStreak does not transmit activity or use external services. History is stored in `activity.json` within the extension's VS Code global storage directory. Writes use atomic replacement and a filesystem lock to merge activity safely across windows sharing that directory. Focus handling prevents unfocused windows from accumulating time. Different VS Code profiles or remote hosts can have separate storage.
+DevStreak does not transmit activity or use external services. History is stored in `activity.json` in VS Code's global storage directory for the extension. It includes dates, project identities, file URIs and paths, character totals, and active time by language. Document contents are not stored.
 
-Existing history migrates once into **Earlier activity**. Original date buckets and measurements are preserved because older records used UTC dates and elapsed wall time; their project identity and original timezone cannot be reconstructed. Migration leaves the original VS Code record intact. Explicit clear/import operations also remove that original record in the current extension host.
+Activity saves every **five seconds** and on normal extension deactivation. The dashboard footer shows the current state:
 
-JSON export is a restorable backup of all projects, including file URIs, paths, and language time. Backups use data format version `3`; this is separate from the extension release version. Existing version-2 storage and backups migrate automatically, preserving totals and assigning earlier time to Unknown language. CSV export contains one row per date and project with active seconds, character totals, file counts, paths, and a **Language active seconds** column containing a JSON map of language IDs to seconds. Neither export is limited by the dashboard's project filter. JSON exports use compact encoding. Both export and import enforce the same **100 MiB** byte limit, so every successful JSON export fits the import limit. Oversized exports fail before writing the destination file. Import accepts DevStreak version-2 and version-3 JSON backups up to **100 MiB**, validates their structure, and replaces existing history; export a backup first if you want to retain it. Other windows discard pending activity from the replaced history on their next save.
+| Status | Meaning |
+| --- | --- |
+| **Saving…** | Changes are waiting to be saved or a storage operation is running. |
+| **Saved on this device.** | The latest activity has been saved. With remote development, storage may be on the remote host. |
+| **Save failed.** | A storage operation failed. The error appears with a **Retry save** button; automatic saves also retry. |
+| **History needs recovery.** | Stored history could not be loaded safely. Use **Recover history** before tracking can resume. |
 
-Activity saves every five seconds and on normal extension deactivation. The dashboard footer shows **Saving…** while changes are pending or storage is busy, and **Saved on this device** after saving completes. A storage failure shows its error and a **Retry save** button; automatic saves also retry. A forced crash can lose activity since the last completed save. Corrupt or unsupported stored data pauses tracking and shows **Recovery needed**, while commands and the dashboard remain available. Run **DevStreak: Recover History** or select **Recover history** in the dashboard to retry loading, restore a validated JSON backup, or reset history. Restore/reset require confirmation and preserve the damaged file as `activity.corrupt-<timestamp>-<id>.json` alongside `activity.json` before replacing it. If another window has already repaired the file, use **Retry loading** to pick up its history. Permission errors and failed recovery writes leave the original file intact.
+A forced crash can lose activity since the last completed save. Windows sharing the same storage merge their activity using atomic writes and a filesystem lock. Different VS Code profiles and remote hosts may have separate history.
 
-The dashboard uses VS Code theme colors, adapts to narrow editor groups, and provides keyboard navigation, visible focus, and reduced-motion support.
+## Backups, exports, and recovery
 
-## Commands and keyboard navigation
+Open **More** in the dashboard to manage your history:
 
-All commands are available from the Command Palette:
+- **Back up as JSON:** Save a restorable copy of all projects, including file identifiers, paths, and language time.
+- **Export as CSV:** Save one row per date and project with active seconds, characters, file counts, paths, and language time.
+- **Import JSON backup:** Validate a backup and replace existing history after confirmation.
+- **Clear history…:** Delete history after confirmation.
+
+JSON export and import share a **100 MiB** limit. New backups use data format version `3`; version-2 backups are also accepted and migrated automatically. Earlier language time is preserved as **Unknown language**. Exports always include all projects, regardless of the dashboard filter.
+
+Import and clear affect every window sharing the storage directory. Export a backup first if you want to keep your current history. Other windows discard pending activity from replaced history on their next save.
+
+If history is corrupt or unsupported, tracking pauses and recovery controls remain available. Choose **Recover history** in the dashboard or run **DevStreak: Recover History**, then select:
+
+- **Retry loading** to try reading the stored history again, including after another window repairs it.
+- **Restore JSON backup** to replace it with a validated backup.
+- **Reset history** to start again with empty history.
+
+Restore and reset require confirmation. They preserve damaged storage as `activity.corrupt-<timestamp>-<id>.json` alongside `activity.json` before replacing it.
+
+Legacy history from earlier DevStreak versions migrates into **Earlier activity**. Its original date buckets and measurements are preserved; project identity and timezone cannot be reconstructed.
+
+## Commands
+
+Open the Command Palette and search for **DevStreak**.
 
 | Command | Action |
 | --- | --- |
 | **DevStreak: Open Activity** | Open or reveal the dashboard. |
-| **DevStreak: Pause / Resume Tracking** | Toggle manual tracking pause for this workspace. |
-| **DevStreak: Open Settings** | Open DevStreak settings. |
+| **DevStreak: Pause / Resume Tracking** | Toggle tracking for the current workspace. |
+| **DevStreak: Open Settings** | Open the extension's settings. |
 | **DevStreak: Export JSON Backup** | Save a restorable backup of all history. |
 | **DevStreak: Export CSV** | Save a date/project activity report. |
 | **DevStreak: Import JSON Backup** | Replace history with a validated backup after confirmation. |
 | **DevStreak: Clear History** | Delete history after confirmation. |
-| **DevStreak: Recover History** | Retry loading, restore a backup, or reset damaged history while preserving the original file. |
+| **DevStreak: Recover History** | Retry loading, restore a backup, or reset damaged history. |
 
-Tab to a date in the calendar, then use:
+## Keyboard navigation
 
-- **Left/Right arrows:** previous/next day.
-- **Up/Down arrows:** previous/next week.
-- **Home/End:** start/end of the week.
-- **Page Up/Page Down:** previous/next month, retaining the day where possible.
+Tab to a date in the month calendar, then use these keys:
 
-Future dates are disabled. The **Today** button returns to the current date.
+| Key | Action |
+| --- | --- |
+| Left / Right | Previous / next day. |
+| Up / Down | Previous / next week. |
+| Home / End | First / last day of the week. |
+| Page Up / Page Down | Previous / next month, keeping the day where possible. |
+
+Future dates are disabled. Use **Today** to return to the current date. Controls provide visible keyboard focus, and the dashboard supports reduced motion.
 
 ## Development
 
-Requires VS Code 1.109 or later and Node.js 22 or later for development tests.
+Use **Node.js 22 or later** and **VS Code 1.109 or later**.
 
 ```sh
 npm ci
-npm test
 ```
 
-`npm test` runs strict lint checks, JavaScript type checking, and the existing Node regression suite, including idle/focus tracking, timezone/DST boundaries, concurrent storage, migration, backup validation, controller lifecycle, dashboard messages, and keyboard date navigation. The dashboard unit tests use a small simulated DOM; they do not verify browser layout or theme contrast. `npm run test:integration` runs the extension in a separate VS Code test host; it requires a graphical environment and may download VS Code. Set `DEVSTREAK_VSCODE_EXECUTABLE` to an installed VS Code executable to use it instead.
+Open the project in VS Code and press **F5** to launch the Extension Development Host. In that window, run **DevStreak: Open Activity**. No build step or runtime dependencies are required.
 
-Press **F5** in VS Code to launch the Extension Development Host, then run **DevStreak: Open Activity**. No build step or runtime dependencies are required.
+| Script | Purpose |
+| --- | --- |
+| `npm run lint` | Check JavaScript with ESLint. |
+| `npm run typecheck` | Check JavaScript and shared JSDoc types. |
+| `npm test` | Run lint, type checking, and the existing Node unit tests. |
+| `npm run test:integration` | Run the existing extension-host tests; requires a graphical environment and may download VS Code. |
 
-Before a release, run the extension-host tests and inspect the dashboard in light, dark, and high-contrast themes and in a narrow editor group. Check that the timer freezes when idle or unfocused, resumes without backfilling idle time, and that JSON export/import round-trips correctly. Automated simulated-DOM tests do not replace this visual check.
+For extension-host tests, set `DEVSTREAK_VSCODE_EXECUTABLE` to an installed VS Code executable to use that installation.
 
-`npm run typecheck` checks the runtime JavaScript and shared JSDoc contracts in `src/types.d.ts`. Status-bar updates read only today's records. Dashboard summaries cache unchanged days, load file details for the selected date, and send changed-day patches; missed revisions trigger a complete refresh.
+The main modules are `src/tracker.js` for timing, `src/model.js` for summaries, `src/storage.js` for persistence, and `src/controller.js` for VS Code integration. Dashboard markup is in `src/webview.js`, with its script and styles in `media/`.
 
-The code is split into `src/tracker.js` for activity timing, `src/model.js` for data and summaries, `src/storage.js` for persistence, `src/controller.js` for VS Code integration, and `media/` for the dashboard.
+## Feedback
+
+Report bugs or suggest features in the [GitHub issue tracker](https://github.com/Alwaystanishq/devstreak/issues).
 
 ## License
 
