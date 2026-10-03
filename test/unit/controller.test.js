@@ -379,8 +379,8 @@ test("invalid and oversized imports preserve history without requesting replacem
     readFile: async () => Buffer.from('{"version":99,"days":{}}'),
   };
   await assert.rejects(f.controller.importData(), /Unsupported backup version/);
-  f.vscode.workspace.fs.stat = async () => ({ size: 21 * 1024 * 1024 });
-  await assert.rejects(f.controller.importData(), /20 MB/);
+  f.vscode.workspace.fs.stat = async () => ({ size: 101 * 1024 * 1024 });
+  await assert.rejects(f.controller.importData(), /100 MiB/);
   assert.equal(confirmations, 0);
   assert.equal(JSON.stringify(f.controller.data), before);
 });

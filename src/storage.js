@@ -12,12 +12,13 @@ class StaleGenerationError extends Error {
 }
 
 function storageError(message, cause) {
-  const error = new Error(`${message} Existing activity was not overwritten.`, { cause });
+  const error = Object.assign(new Error(`${message} Existing activity was not overwritten.`, { cause }), { code: "INVALID_STORAGE" });
   error.code = 'INVALID_STORAGE';
   return error;
 }
 
 class ActivityStore {
+  /** @param {{directory: string, legacyData?: unknown, lockTimeoutMs?: number}} options */
   constructor({ directory, legacyData, lockTimeoutMs = 5000 }) {
     if (!path.isAbsolute(directory)) throw new TypeError('Storage directory must be absolute.');
     if (!Number.isFinite(lockTimeoutMs) || lockTimeoutMs < 0) throw new TypeError('Lock timeout must be a nonnegative finite number.');
@@ -55,6 +56,7 @@ class ActivityStore {
     }));
   }
 
+  /** @param {import('./types').ActivityChange[]} changes */
   append(changes) {
     // Capture BEFORE enqueueing: an earlier queued read must not bless stale deltas.
     const expectedGeneration = this.generation;
@@ -71,6 +73,7 @@ class ActivityStore {
     }));
   }
 
+  /** @param {import('./types').ActivityData} data */
   replace(data) {
     let snapshot;
     try { snapshot = validateData(structuredClone(data)); } catch (error) { return Promise.reject(error); }
@@ -86,6 +89,26 @@ class ActivityStore {
 
   clear() {
     return this.replace(emptyData());
+  }
+
+  recover(data = emptyData()) {
+    let snapshot;
+    try { snapshot = validateData(structuredClone(data)); } catch (error) { return Promise.reject(error); }
+    return this.enqueue(() => this.withLock(async () => {
+      // Never replace healthy history if another window repaired it meanwhile.
+      try {
+        if (await this.load()) throw new Error('Storage is readable again. Choose Retry loading before replacing history.');
+      } catch (error) {
+        if (error.code !== 'INVALID_STORAGE') throw error;
+        const preserved = path.join(this.directory, `activity.corrupt-${Date.now()}-${randomUUID()}.json`);
+        await fs.copyFile(this.filePath, preserved, fs.constants.COPYFILE_EXCL);
+        this.lastRecoveryPath = preserved;
+      }
+      const stored = { storageVersion: 1, generation: randomUUID(), data: snapshot };
+      await this.write(stored);
+      this.generation = stored.generation;
+      return stored.data;
+    }));
   }
 
   enqueue(operation) {
@@ -152,7 +175,7 @@ class ActivityStore {
       this.pendingRelease = release;
       if (failure) failure.cleanupError = error;
       else {
-        failure = new Error('Activity storage operation completed, but its lock could not be released.', { cause: error });
+        failure = Object.assign(new Error('Activity storage operation completed, but its lock could not be released.', { cause: error }), { code: 'STORAGE_LOCK_CLEANUP', committedData: value });
         failure.code = 'STORAGE_LOCK_CLEANUP';
         // The caller must acknowledge these deltas instead of replaying them.
         failure.committedData = value;

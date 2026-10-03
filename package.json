@@ -49,6 +49,10 @@
       {
         "command": "devstreak.clearHistory",
         "title": "DevStreak: Clear History"
+      },
+      {
+        "command": "devstreak.recoverHistory",
+        "title": "DevStreak: Recover History"
       }
     ],
     "configuration": {
@@ -102,18 +106,20 @@
   },
   "scripts": {
     "lint": "eslint . --max-warnings 0",
-    "pretest": "npm run lint",
+    "pretest": "npm run lint && npm run typecheck",
     "test": "node --test \"test/unit/*.test.js\"",
     "test:unit": "node --test \"test/unit/*.test.js\"",
-    "test:integration": "vscode-test"
+    "test:integration": "vscode-test",
+    "typecheck": "tsc --project jsconfig.json"
   },
   "devDependencies": {
-    "@types/vscode": "^1.109.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
-    "eslint": "^9.39.2",
+    "@types/vscode": "^1.109.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
-    "globals": "14.0.0"
+    "eslint": "^9.39.2",
+    "globals": "14.0.0",
+    "typescript": "^7.0.2"
   }
 }

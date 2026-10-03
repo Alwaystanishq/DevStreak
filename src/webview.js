@@ -1,7 +1,9 @@
 const vscode = require("vscode");
 const { randomBytes } = require("node:crypto");
 
-/** The dashboard receives data through messages, never through generated markup. */
+/** The dashboard receives data through messages, never through generated markup.
+ * @param {import('vscode').Webview} webview
+ * @param {import('vscode').Uri} extensionUri */
 function getWebviewHTML(webview, extensionUri) {
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "dashboard.js"));
   const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "dashboard.css"));
@@ -42,6 +44,10 @@ function getWebviewHTML(webview, extensionUri) {
       </div>
     </header>
 
+    <section class="storage-banner" id="storage-banner" aria-label="History recovery" hidden>
+      <p id="storage-error"></p>
+      <button class="button secondary" id="recover-button" type="button">Recover history</button>
+    </section>
     <section class="summary-grid" aria-label="Activity summary">
       <article class="summary-card">
         <h2>Today</h2>
@@ -94,11 +100,11 @@ function getWebviewHTML(webview, extensionUri) {
             <p id="streak-threshold">Select a day to explore your activity.</p>
             <div class="legend" aria-label="Active time intensity">
               <span>Less</span>
-              <span class="legend-cell" data-level="0" id="legend-0"></span>
-              <span class="legend-cell" data-level="1" id="legend-1"></span>
-              <span class="legend-cell" data-level="2" id="legend-2"></span>
-              <span class="legend-cell" data-level="3" id="legend-3"></span>
-              <span class="legend-cell" data-level="4" id="legend-4"></span>
+              <span class="legend-cell" role="img" data-level="0" id="legend-0"></span>
+              <span class="legend-cell" role="img" data-level="1" id="legend-1"></span>
+              <span class="legend-cell" role="img" data-level="2" id="legend-2"></span>
+              <span class="legend-cell" role="img" data-level="3" id="legend-3"></span>
+              <span class="legend-cell" role="img" data-level="4" id="legend-4"></span>
               <span>More</span>
             </div>
           </div>
@@ -155,6 +161,31 @@ function getWebviewHTML(webview, extensionUri) {
         <p class="analytics-note" id="language-total"></p>
         <p class="analytics-note" id="language-note" hidden>Unknown language includes earlier activity recorded before language tracking was available.</p>
       </article>
+    </section>
+
+    <section class="analytics-panel range-panel" aria-labelledby="report-title">
+      <div class="section-heading"><h2 id="report-title">Date-range report</h2><p>Review any period and compare it with the preceding period of the same length.</p></div>
+      <form id="report-form" class="report-form">
+        <label for="report-start">From<input id="report-start" type="date" required></label>
+        <label for="report-end">Through<input id="report-end" type="date" required></label>
+        <button class="button secondary" type="submit">Apply dates</button>
+      </form>
+      <p id="report-error" class="report-error" role="alert" hidden></p>
+      <p id="report-context" class="analytics-note">Choose dates and apply to see your report. The project filter applies here too.</p>
+      <div id="report-results" hidden>
+        <dl class="report-metrics">
+          <div><dt>Active time</dt><dd id="report-time"></dd></div>
+          <div><dt>Active days</dt><dd id="report-days"></dd></div>
+          <div><dt>Average per active day</dt><dd id="report-average"></dd></div>
+          <div><dt>Goal days</dt><dd id="report-goals"></dd></div>
+        </dl>
+        <p id="report-comparison" class="analytics-note"></p>
+        <div class="report-charts">
+          <section aria-labelledby="report-projects-title"><h3 id="report-projects-title">Projects</h3><ul id="report-projects" class="project-breakdown" aria-label="Report project active time"></ul></section>
+          <section aria-labelledby="report-languages-title"><h3 id="report-languages-title">Languages</h3><ul id="report-languages" class="project-breakdown" aria-label="Report language active time"></ul></section>
+        </div>
+        <p id="report-empty" class="empty-breakdown" hidden>No active time recorded in this period.</p>
+      </div>
     </section>
 
     <footer class="page-footer"><span>Saved on this device.</span><span>Reading and thinking count while your session is active.</span></footer>

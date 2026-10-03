@@ -13,22 +13,34 @@
     projectId: typeof saved.projectId === "string" ? saved.projectId : "",
     breakdownPeriod: saved.breakdownPeriod === "month" ? "month" : "week",
     languagePeriod: saved.languagePeriod === "month" ? "month" : "week",
+    reportStart: isDateKey(saved.reportStart) ? saved.reportStart : "",
+    reportEnd: isDateKey(saved.reportEnd) ? saved.reportEnd : "",
   };
+  /** @type {import('../src/types').DashboardSnapshot} */
   let snapshot;
   let calendarKey = "";
   let projectsKey = "";
   let filesKey = "";
   let breakdownKey = "";
   let languageKey = "";
+  let reportKey = "";
+  let revision = 0;
+  let requestedDate = "";
+  let restoredReport = false;
   const dateButtons = new Map();
   const monthTotals = new Map();
-  const byId = (id) => document.getElementById(id);
+  /** @template {string & keyof import('../src/types').DashboardElements} K
+   * @param {K} id
+   * @returns {import('../src/types').DashboardElements[K]} */
+  const byId = (id) => /** @type {import('../src/types').DashboardElements[K]} */ (document.getElementById(id));
   const fullDateFormatter = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
   const monthFormatter = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" });
   const numberFormatter = new Intl.NumberFormat();
   const percentFormatter = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 });
   const shortDateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
 
+  /** @param {unknown} value
+   * @returns {value is string} */
   function isDateKey(value) {
     if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
     const date = new Date(value + "T12:00:00");
@@ -36,7 +48,7 @@
   }
 
   function dateKey(date) {
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    return `${String(date.getFullYear()).padStart(4, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
   }
 
   function parseDate(key) { return new Date(key + "T12:00:00"); }
@@ -66,6 +78,11 @@
     if (element.textContent !== text) element.textContent = text;
   }
 
+  /** @template {keyof HTMLElementTagNameMap} T
+   * @param {T} tag
+   * @param {string} [className]
+   * @param {string | number} [text]
+   * @returns {HTMLElementTagNameMap[T]} */
   function element(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -74,7 +91,8 @@
   }
 
   function persist() { vscode.setState({ ...state }); }
-  function send(type, extra = {}) { vscode.postMessage({ type, ...extra }); }
+  /** @param {import('../src/types').DashboardRequest['type']} type */
+  function send(type, extra = {}) { vscode.postMessage(/** @type {import('../src/types').DashboardRequest} */ ({ type, ...extra })); }
   function threshold() { return Math.max(1, seconds(snapshot.summary.qualifyingSeconds) || 900); }
   function record(date) { return snapshot.days[date] || { time: 0, characters: 0, files: [] }; }
   function level(time) { return time <= 0 ? 0 : time < threshold() ? 1 : time < threshold() * 2 ? 2 : time < threshold() * 4 ? 3 : 4; }
@@ -100,7 +118,9 @@
     setText("status-text", status === "tracking" ? "Tracking active time" : status === "paused" ? "Tracking paused" : "Idle");
     byId("tracking-status").title = status === "tracking" ? "Activity keeps your coding session active." : status === "paused" ? "Resume when you are ready to track again." : "Tracking resumes when you return to an eligible editor.";
     setText("pause-button", snapshot.paused ? "Resume" : "Pause");
-    byId("pause-button").disabled = false;
+    byId("pause-button").disabled = Boolean(snapshot.recoveryRequired);
+    byId("storage-banner").hidden = !snapshot.recoveryRequired;
+    setText("storage-error", snapshot.storageError || "History needs recovery before tracking can resume.");
     byId("pause-button").setAttribute("aria-label", snapshot.paused ? "Resume activity tracking" : "Pause activity tracking");
     setText("streak-threshold", `${duration(threshold())} of active time makes a streak day.`);
     const labels = ["No active time", `Under ${duration(threshold())}`, `${duration(threshold())} to under ${duration(threshold() * 2)}`, `${duration(threshold() * 2)} to under ${duration(threshold() * 4)}`, `${duration(threshold() * 4)} or more`];
@@ -278,7 +298,10 @@
     setText("day-badge", "Streak day");
     const hasActivity = time > 0 || seconds(day.characters) > 0 || files.length > 0;
     setText("day-note", hasActivity ? "Characters added includes pasted text. Active time can include reading between edits." : state.selectedDate === snapshot.today ? "Your next session starts here. Open a file and begin working to record activity." : "No activity recorded. Every new day is a fresh start.");
-    renderFiles(files);
+    if (snapshot.selectedDate && snapshot.selectedDate !== state.selectedDate) {
+      filesKey = "";
+      byId("file-list").replaceChildren(element("p", "empty-files", "Loading file details…"));
+    } else renderFiles(files);
   }
 
   function dateRange(start, end) {
@@ -383,6 +406,46 @@
     setText("language-total", `${total} total · ${languages.length} ${languages.length === 1 ? "language" : "languages"} with active time`);
   }
 
+  function renderReport() {
+    for (const name of ["start", "end"]) {
+      const input = /** @type {HTMLInputElement} */ (byId(`report-${name}`));
+      input.max = snapshot.today;
+      if (!input.value) input.value = state[name === "start" ? "reportStart" : "reportEnd"] || (name === "start" ? snapshot.today.slice(0, 7) + "-01" : snapshot.today);
+    }
+    const report = snapshot.report;
+    byId("report-results").hidden = !report;
+    if (!report) return;
+    const project = snapshot.projects.find((item) => item.id === state.projectId);
+    setText("report-context", `${dateRange(report.start, report.end)} · ${project ? project.name : "All projects"}`);
+    setText("report-time", duration(report.totalSeconds, true));
+    setText("report-days", report.activeDays);
+    setText("report-average", duration(report.averageSeconds, true));
+    setText("report-goals", report.goalDays === null ? "Off" : report.goalDays);
+    const change = report.changePercent;
+    const comparison = change === null ? "No baseline" : change === 0 ? "No change" : `${percentFormatter.format(Math.abs(change) / 100)} ${change > 0 ? "more" : "less"}`;
+    setText("report-comparison", `${comparison} active time compared with ${dateRange(report.comparisonStart, report.comparisonEnd)}. Goal days use your current target.`);
+    byId("report-empty").hidden = report.totalSeconds > 0;
+    const signature = JSON.stringify([report.projects, report.languages, report.totalSeconds]);
+    if (signature === reportKey) return;
+    reportKey = signature;
+    for (const kind of ["projects", "languages"]) {
+      const rows = report[kind].map((item) => {
+        const name = kind === "projects" ? item.name : languageName(item.id);
+        const row = element("li", "project-time-row");
+        const heading = element("div", "project-time-heading");
+        const share = percentFormatter.format(report.totalSeconds ? item.seconds / report.totalSeconds : 0);
+        heading.append(element("span", "project-time-name", name), element("span", "project-time-value", `${duration(item.seconds)} · ${share}`));
+        const meter = element("meter", "project-time-bar");
+        meter.min = 0; meter.max = report.totalSeconds || 1; meter.value = item.seconds;
+        meter.setAttribute("aria-label", `${name} active time`);
+        meter.setAttribute("aria-valuetext", `${duration(item.seconds)}, ${share} of active time`);
+        row.append(heading, meter);
+        return row;
+      });
+      byId(`report-${kind}`).replaceChildren(...rows);
+    }
+  }
+
   function render() {
     if (!snapshot) return;
     renderSummary();
@@ -392,6 +455,7 @@
     renderInsights();
     renderBreakdown();
     renderLanguages();
+    renderReport();
     byId("dashboard").setAttribute("aria-busy", "false");
   }
 
@@ -410,6 +474,8 @@
   function selectDate(date, focus = false) {
     if (!snapshot || !isDateKey(date) || date > snapshot.today) return;
     state.selectedDate = date;
+    requestedDate = date;
+    send("selectDate", { date });
     if (state.mode === "month" && date.slice(0, 7) !== state.viewedMonth.slice(0, 7) || state.mode === "year" && date.slice(0, 4) !== state.viewedMonth.slice(0, 4)) state.viewedMonth = date.slice(0, 7) + "-01";
     persist();
     renderCalendar();
@@ -433,7 +499,7 @@
     setText("calendar-announcement", `${mode === "year" ? "Year" : "Month"} view, ${byId("period-title").textContent}`);
   });
   byId("calendar").addEventListener("click", (event) => {
-    const button = event.target.closest("button");
+    const button = /** @type {HTMLElement} */ (event.target).closest("button");
     if (!button || button.disabled) return;
     if (button.dataset.date) selectDate(button.dataset.date);
     else if (button.dataset.month) {
@@ -446,7 +512,7 @@
     }
   });
   byId("calendar").addEventListener("keydown", (event) => {
-    const button = event.target.closest("button[data-date]");
+    const button = /** @type {HTMLElement} */ (event.target).closest("button");
     if (!button || !snapshot) return;
     const date = parseDate(button.dataset.date);
     const steps = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
@@ -464,7 +530,7 @@
     selectDate(key > snapshot.today ? snapshot.today : key, true);
   });
   byId("project-filter").addEventListener("change", (event) => {
-    state.projectId = event.target.value;
+    state.projectId = /** @type {HTMLSelectElement} */ (event.target).value;
     persist();
     send("filter", { projectId: state.projectId });
   });
@@ -478,14 +544,31 @@
     persist();
     if (snapshot) renderLanguages();
   });
+  byId("report-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!snapshot) return;
+    const start = byId("report-start").value;
+    const end = byId("report-end").value;
+    if (!isDateKey(start) || !isDateKey(end) || start > end || end > snapshot.today) {
+      setText("report-error", "Choose valid dates in order, ending on or before today.");
+      byId("report-error").hidden = false;
+      return;
+    }
+    byId("report-error").hidden = true;
+    state.reportStart = start;
+    state.reportEnd = end;
+    persist();
+    send("report", { start, end });
+  });
+  byId("recover-button").addEventListener("click", () => send("recoverHistory"));
   byId("pause-button").addEventListener("click", () => send("togglePause"));
   byId("settings-button").addEventListener("click", () => send("settings"));
-  for (const button of document.querySelectorAll("[data-action]")) button.addEventListener("click", () => {
+  for (const button of document.querySelectorAll("button[data-action]")) button.addEventListener("click", () => {
     byId("data-menu").open = false;
     byId("data-menu").querySelector("summary").focus();
-    send(button.dataset.action);
+    send(/** @type {import("../src/types").DashboardRequest["type"]} */ (button.getAttribute("data-action")));
   });
-  document.addEventListener("click", (event) => { if (!byId("data-menu").contains(event.target)) byId("data-menu").open = false; });
+  document.addEventListener("click", (event) => { if (!byId("data-menu").contains(/** @type {Node} */ (event.target))) byId("data-menu").open = false; });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && byId("data-menu").open) {
       byId("data-menu").open = false;
@@ -493,10 +576,17 @@
     }
   });
   window.addEventListener("message", (event) => {
-    const data = event.data;
+    let data = event.data;
+    if (data?.type === "patch") {
+      if (!snapshot || data.baseRevision !== revision) { send("ready"); return; }
+      const days = { ...snapshot.days, ...data.days };
+      for (const date of data.removedDays || []) delete days[date];
+      data = { ...data, type: "snapshot", days };
+    }
     if (!data || data.type !== "snapshot" || !isDateKey(data.today) || !data.days || !data.summary) return;
     const previousToday = snapshot?.today;
     snapshot = data;
+    revision = data.revision || 0;
     if (!state.selectedDate || state.selectedDate > data.today) state.selectedDate = data.today;
     if (!state.viewedMonth || state.viewedMonth.slice(0, 7) > data.today.slice(0, 7)) state.viewedMonth = data.today.slice(0, 7) + "-01";
     if (previousToday && previousToday !== data.today && state.selectedDate === previousToday) {
@@ -507,6 +597,16 @@
     state.projectId = typeof data.projectId === "string" ? data.projectId : "";
     persist();
     render();
+    if (data.selectedDate && data.selectedDate !== state.selectedDate && requestedDate !== state.selectedDate) {
+      requestedDate = state.selectedDate;
+      send("selectDate", { date: state.selectedDate });
+    }
+    if (!restoredReport) {
+      restoredReport = true;
+      if (state.reportStart && state.reportEnd && state.reportStart <= state.reportEnd && state.reportEnd <= data.today) {
+        send("report", { start: state.reportStart, end: state.reportEnd });
+      }
+    }
   });
 
   const restoredProjectId = state.projectId;

@@ -2,6 +2,7 @@
 
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
+/** @returns {import('./types').ActivityData} */
 function emptyData() {
   return { version: 3, days: {} };
 }
@@ -67,6 +68,7 @@ function quantity(value, label, integer = false) {
   return value;
 }
 
+/** @returns {import('./types').ActivityData} */
 function validateData(input) {
   record(input, "Backup", ["version", "days"]);
   if (![2, 3].includes(input.version)) throw new TypeError("Unsupported backup version.");
@@ -136,9 +138,13 @@ function migrateLegacy(input) {
   return result;
 }
 
+/** @param {import('./types').ActivityData} data
+ * @param {import('./types').ActivityChange[]} changes
+ * @returns {import('./types').ActivityData} */
 function applyChanges(data, changes) {
   if (!Array.isArray(changes)) throw new TypeError("Changes must be an array.");
   if (data.version === 2) data = validateData(data);
+  /** @type {import('./types').ActivityData} */
   const result = { version: 3, days: { ...data.days } };
   for (const change of changes) {
     if (!change || !isDateKey(change.date)) throw new TypeError("Invalid change date.");
@@ -153,7 +159,7 @@ function applyChanges(data, changes) {
     }
     if (!seconds && !characters && !change.file) continue;
     const day = result.days[change.date];
-    const previous = day && Object.hasOwn(day.projects, id) ? day.projects[id] : { time: 0, characters: 0, files: {} };
+    const previous = day && Object.hasOwn(day.projects, id) ? day.projects[id] : { name, time: 0, characters: 0, files: {}, languages: {} };
     const project = {
       name,
       time: quantity(previous.time + seconds, "Total time"),
@@ -209,6 +215,36 @@ function periodActivity(data, start, end, projectId, goalSeconds, names) {
   };
 }
 
+/** @param {import('./types').ActivityDay} day
+ * @param {string} projectId
+ * @param {boolean} includeFiles
+ * @param {import('./types').SummaryOptions['dayCache']} [cache]
+ * @returns {import('./types').DaySummary} */
+function daySummary(day, projectId, includeFiles, cache) {
+  const key = `${projectId}:${includeFiles}`;
+  const cached = cache?.get(day);
+  if (cached?.has(key)) return cached.get(key);
+  const result = { time: 0, characters: 0, files: [] };
+  for (const [id, project] of Object.entries(day.projects)) {
+    if (projectId && id !== projectId) continue;
+    result.time += project.time;
+    result.characters += project.characters;
+    if (includeFiles) for (const [fileId, path] of Object.entries(project.files)) {
+      result.files.push({ id: fileId, path, projectId: id, projectName: project.name });
+    }
+  }
+  result.files.sort((a, b) => a.projectName.localeCompare(b.projectName) || a.path.localeCompare(b.path) || a.id.localeCompare(b.id));
+  if (cache) {
+    const entries = cached || new Map();
+    entries.set(key, result);
+    cache.set(day, entries);
+  }
+  return result;
+}
+
+/** @param {import('./types').ActivityData} data
+ * @param {import('./types').SummaryOptions} [options]
+ * @returns {import('./types').SummaryResult} */
 function summarize(data, options = {}) {
   const today = options.today || localDateKey();
   const todayDate = parseLocalDate(today);
@@ -219,18 +255,11 @@ function summarize(data, options = {}) {
   const projects = new Map();
   const days = {};
   for (const date of Object.keys(data.days).sort()) {
-    const day = { time: 0, characters: 0, files: [] };
     for (const [id, project] of Object.entries(data.days[date].projects)) {
       projects.set(id, project.name);
-      if (projectId && id !== projectId) continue;
-      day.time += project.time;
-      day.characters += project.characters;
-      for (const [fileId, path] of Object.entries(project.files)) {
-        day.files.push({ id: fileId, path, projectId: id, projectName: project.name });
-      }
     }
-    day.files.sort((a, b) => a.projectName.localeCompare(b.projectName) || a.path.localeCompare(b.path) || a.id.localeCompare(b.id));
-    days[date] = day;
+    days[date] = daySummary(data.days[date], projectId,
+      options.includeFilesForDate === undefined || options.includeFilesForDate === date, options.dayCache);
   }
   const qualifyingSeconds = streakMinimumMinutes * 60;
   const qualified = Object.keys(days).sort().filter((date) => date <= today && days[date].time >= qualifyingSeconds);
@@ -279,6 +308,31 @@ function summarize(data, options = {}) {
   };
 }
 
+/** Inclusive local calendar dates, compared with the preceding equal-length period.
+ * @param {import('./types').ActivityData} data
+ * @param {string} start
+ * @param {string} end
+ * @param {import('./types').SummaryOptions} [options]
+ * @returns {import('./types').RangeReport} */
+function summarizeRange(data, start, end, options = {}) {
+  const today = options.today || localDateKey();
+  if (!isDateKey(start) || !isDateKey(end) || start > end || end > today) {
+    throw new TypeError('Choose valid dates in order, ending on or before today.');
+  }
+  const length = Math.round((Date.parse(end + 'T12:00:00Z') - Date.parse(start + 'T12:00:00Z')) / 86400000) + 1;
+  const names = new Map();
+  for (const date of Object.keys(data.days).sort()) {
+    for (const [id, project] of Object.entries(data.days[date].projects)) names.set(id, project.name);
+  }
+  const goal = (options.dailyGoalMinutes ?? 60) * 60;
+  const current = periodActivity(data, start, end, options.projectId || '', goal, names);
+  const previous = periodActivity(data, shiftDate(start, -length), shiftDate(start, -1), options.projectId || '', goal, names);
+  const changeSeconds = current.totalSeconds - previous.totalSeconds;
+  return { ...current, comparisonStart: previous.start, comparisonEnd: previous.end,
+    previousSeconds: previous.totalSeconds, changeSeconds,
+    changePercent: previous.totalSeconds ? changeSeconds / previous.totalSeconds * 100 : null };
+}
+
 function formatDuration(seconds) {
   const total = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
   return `${String(Math.floor(total / 3600)).padStart(2, "0")}:${String(Math.floor(total / 60) % 60).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
@@ -303,4 +357,4 @@ function toCsv(data) {
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 
-module.exports = { emptyData, validateData, migrateLegacy, applyChanges, summarize, localDateKey, parseLocalDate, formatDuration, toCsv };
+module.exports = { emptyData, validateData, migrateLegacy, applyChanges, summarize, summarizeRange, isDateKey, localDateKey, parseLocalDate, formatDuration, toCsv };

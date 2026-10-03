@@ -11,6 +11,7 @@ Click the stopwatch in the status bar or run **DevStreak: Open Activity** from t
 - See each project's duration and share of active time for this week or this month, through today. The breakdown period is remembered while the dashboard tab remains open.
 - See each language's duration and share of active time for this week or this month, through today. Language breakdowns follow the project filter and remember their own period selection while the dashboard tab remains open.
 - Navigate between months or switch to a compact year overview.
+- Apply custom dates in **Date-range report** to review active time, active days, average duration, goal days, and project/language shares. Compare the result with the preceding period of the same length.
 - Select a date for its precise duration, character count, and edited files grouped by project.
 - Filter the dashboard by project. The status bar always shows the total across all projects.
 - Pause or resume tracking from the dashboard or the Command Palette.
@@ -44,7 +45,7 @@ Project filters apply to calendar details, streaks, weekly totals, goal progress
 
 Language time follows the active editor's VS Code language mode, including untitled documents and custom languages. Switching files or changing language mode settles elapsed time under the previous language. Reading and thinking during the active grace period count toward that language; paused, idle, unfocused, and excluded activity follow the same rules as overall time. Earlier history appears as **Unknown language** because its original language cannot be reconstructed. Language shares use all active time in the selected period, including unknown time.
 
-Weekly comparisons respect your configured week start and compare the same elapsed weekdays in each week. An empty previous period shows **No baseline**. Average time uses only days with positive active time; edits without active time do not count as active days or appear in the time breakdown. Goal days are calculated using your current target, so changing it updates historical goal counts; disabling the goal shows **Off**. Insight and breakdown date ranges follow the current local day independently of calendar navigation.
+Weekly comparisons respect your configured week start and compare the same elapsed weekdays in each week. An empty previous period shows **No baseline**. Average time uses only days with positive active time; edits without active time do not count as active days or appear in the time breakdown. Goal days are calculated using your current target, so changing it updates historical goal counts; disabling the goal shows **Off**. Insight and breakdown date ranges follow the current local day independently of calendar navigation. Custom reports use inclusive local calendar dates, follow the project filter, and compare the same number of calendar days immediately before the selected range. Empty comparison periods show **No baseline**. Applied report dates are remembered while the dashboard tab remains open.
 
 ## Settings
 
@@ -64,9 +65,9 @@ DevStreak does not transmit activity or use external services. History is stored
 
 Existing history migrates once into **Earlier activity**. Original date buckets and measurements are preserved because older records used UTC dates and elapsed wall time; their project identity and original timezone cannot be reconstructed. Migration leaves the original VS Code record intact. Explicit clear/import operations also remove that original record in the current extension host.
 
-JSON export is a restorable backup of all projects, including file URIs, paths, and language time. Backups use data format version `3`; this is separate from the extension release version. Existing version-2 storage and backups migrate automatically, preserving totals and assigning earlier time to Unknown language. CSV export contains one row per date and project with active seconds, character totals, file counts, paths, and a **Language active seconds** column containing a JSON map of language IDs to seconds. Neither export is limited by the dashboard's project filter. Import accepts DevStreak version-2 and version-3 JSON backups up to **20 MB**, validates their structure, and replaces existing history; export a backup first if you want to retain it. Other windows discard pending activity from the replaced history on their next save.
+JSON export is a restorable backup of all projects, including file URIs, paths, and language time. Backups use data format version `3`; this is separate from the extension release version. Existing version-2 storage and backups migrate automatically, preserving totals and assigning earlier time to Unknown language. CSV export contains one row per date and project with active seconds, character totals, file counts, paths, and a **Language active seconds** column containing a JSON map of language IDs to seconds. Neither export is limited by the dashboard's project filter. JSON exports use compact encoding. Both export and import enforce the same **100 MiB** byte limit, so every successful JSON export fits the import limit. Oversized exports fail before writing the destination file. Import accepts DevStreak version-2 and version-3 JSON backups up to **100 MiB**, validates their structure, and replaces existing history; export a backup first if you want to retain it. Other windows discard pending activity from the replaced history on their next save.
 
-Activity saves every five seconds and on normal extension deactivation. A forced crash can lose activity since the last completed save. Corrupt or unsupported stored data produces an error instead of being overwritten.
+Activity saves every five seconds and on normal extension deactivation. A forced crash can lose activity since the last completed save. Corrupt or unsupported stored data pauses tracking and shows **Recovery needed**, while commands and the dashboard remain available. Run **DevStreak: Recover History** or select **Recover history** in the dashboard to retry loading, restore a validated JSON backup, or reset history. Restore/reset require confirmation and preserve the damaged file as `activity.corrupt-<timestamp>-<id>.json` alongside `activity.json` before replacing it. If another window has already repaired the file, use **Retry loading** to pick up its history. Permission errors and failed recovery writes leave the original file intact.
 
 The dashboard uses VS Code theme colors, adapts to narrow editor groups, and provides keyboard navigation, visible focus, and reduced-motion support.
 
@@ -83,6 +84,7 @@ All commands are available from the Command Palette:
 | **DevStreak: Export CSV** | Save a date/project activity report. |
 | **DevStreak: Import JSON Backup** | Replace history with a validated backup after confirmation. |
 | **DevStreak: Clear History** | Delete history after confirmation. |
+| **DevStreak: Recover History** | Retry loading, restore a backup, or reset damaged history while preserving the original file. |
 
 Tab to a date in the calendar, then use:
 
@@ -102,11 +104,13 @@ npm ci
 npm test
 ```
 
-`npm test` runs strict lint checks and the Node regression suite, including idle/focus tracking, timezone/DST boundaries, concurrent storage, migration, backup validation, controller lifecycle, dashboard messages, and keyboard date navigation. The dashboard unit tests use a small simulated DOM; they do not verify browser layout or theme contrast. `npm run test:integration` runs the extension in a separate VS Code test host; it requires a graphical environment and may download VS Code. Set `DEVSTREAK_VSCODE_EXECUTABLE` to an installed VS Code executable to use it instead.
+`npm test` runs strict lint checks, JavaScript type checking, and the existing Node regression suite, including idle/focus tracking, timezone/DST boundaries, concurrent storage, migration, backup validation, controller lifecycle, dashboard messages, and keyboard date navigation. The dashboard unit tests use a small simulated DOM; they do not verify browser layout or theme contrast. `npm run test:integration` runs the extension in a separate VS Code test host; it requires a graphical environment and may download VS Code. Set `DEVSTREAK_VSCODE_EXECUTABLE` to an installed VS Code executable to use it instead.
 
 Press **F5** in VS Code to launch the Extension Development Host, then run **DevStreak: Open Activity**. No build step or runtime dependencies are required.
 
 Before a release, run the extension-host tests and inspect the dashboard in light, dark, and high-contrast themes and in a narrow editor group. Check that the timer freezes when idle or unfocused, resumes without backfilling idle time, and that JSON export/import round-trips correctly. Automated simulated-DOM tests do not replace this visual check.
+
+`npm run typecheck` checks the runtime JavaScript and shared JSDoc contracts in `src/types.d.ts`. Status-bar updates read only today's records. Dashboard summaries cache unchanged days, load file details for the selected date, and send changed-day patches; missed revisions trigger a complete refresh.
 
 The code is split into `src/tracker.js` for activity timing, `src/model.js` for data and summaries, `src/storage.js` for persistence, `src/controller.js` for VS Code integration, and `media/` for the dashboard.
 

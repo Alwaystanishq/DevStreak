@@ -1,13 +1,28 @@
 {
-	"compilerOptions": {
-		"module": "Node16",
-		"target": "ES2022",
-		"checkJs": false,  /* Typecheck .js files. */
-		"lib": [
-			"ES2022"
-		]
-	},
-	"exclude": [
-		"node_modules"
-	]
+  "compilerOptions": {
+    "module": "Node16",
+    "target": "ES2022",
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "types": [
+      "node"
+    ],
+    "skipLibCheck": true,
+    "strict": false,
+    "maxNodeModuleJsDepth": 0
+  },
+  "include": [
+    "extension.js",
+    "src/**/*.js",
+    "src/**/*.d.ts",
+    "media/dashboard.js"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }

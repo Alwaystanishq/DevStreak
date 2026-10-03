@@ -8,6 +8,9 @@ function isIgnored(relativePath, ignoredFolders) {
   });
 }
 
+/** @param {typeof import('vscode')} vscode
+ * @param {import('vscode').TextDocument | undefined} document
+ * @param {string[]} ignoredFolders */
 function documentContext(vscode, document, ignoredFolders) {
   if (!document || !["file", "vscode-remote", "untitled"].includes(document.uri.scheme)) {
     return { eligible: false, projectId: "", projectName: "" };

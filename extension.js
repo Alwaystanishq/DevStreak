@@ -2,6 +2,7 @@ const vscode = require("vscode");
 const { ActivityController } = require("./src/controller");
 
 let controller;
+/** @param {import('vscode').ExtensionContext} context */
 async function activate(context) {
   controller = new ActivityController(vscode, context);
   try {

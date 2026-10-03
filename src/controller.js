@@ -1,22 +1,38 @@
 const { ActivityStore, StaleGenerationError } = require("./storage");
 const { ActiveTracker } = require("./tracker");
-const { emptyData, applyChanges, summarize, localDateKey, formatDuration, validateData, toCsv } = require("./model");
+const { emptyData, applyChanges, summarize, summarizeRange, isDateKey, localDateKey, formatDuration, toCsv } = require("./model");
+const { checkBackupSize, encodeBackup, decodeBackup } = require("./backup");
 const { documentContext } = require("./context");
 
 class ActivityController {
+  /** @param {typeof import('vscode')} vscode
+   * @param {import('vscode').ExtensionContext} context
+   * @param {import('./types').ControllerOptions} [options] */
   constructor(vscode, context, options = {}) {
     this.vscode = vscode;
     this.context = context;
     this.options = options;
     this.now = options.now || Date.now;
     this.data = emptyData();
+    /** @type {import('./types').ActivityChange[]} */
     this.pending = [];
     this.projectId = "";
+    /** @type {import('vscode').WebviewPanel | null} */
     this.panel = null;
+    /** @type {import('vscode').Disposable[]} */
     this.disposables = [];
     this.stopped = false;
     this.maintenance = false;
     this.lastError = "";
+    this.recoveryRequired = false;
+    /** @type {NonNullable<import('./types').SummaryOptions['dayCache']>} */
+    this.dayCache = new WeakMap();
+    /** @type {import('./types').DashboardSnapshot | null} */
+    this.lastSnapshot = null;
+    this.revision = 0;
+    this.selectedDate = "";
+    /** @type {{start: string, end: string} | null} */
+    this.reportRange = null;
   }
 
   settings() {
@@ -31,7 +47,7 @@ class ActivityController {
       idleTimeoutMs: number("idleTimeoutMinutes", 5, 1, 60) * 60000,
       dailyGoalMinutes: number("dailyGoalMinutes", 60, 0, 1440),
       streakMinimumMinutes: number("streakMinimumMinutes", 15, 1, 1440),
-      weekStartsOn: config.get("weekStartsOn", "monday") === "sunday" ? 0 : 1,
+      weekStartsOn: config.get("weekStartsOn", /** @type {string} */ ("monday")) === "sunday" ? 0 : 1,
       ignoredFolders: Array.isArray(ignored) ? ignored : [],
     };
   }
@@ -42,9 +58,16 @@ class ActivityController {
       directory: context.globalStorageUri.fsPath,
       legacyData: context.globalState.get("devstreakData", {}),
     });
-    this.data = await this.storageResult(() => this.store.init());
+    try {
+      this.data = await this.storageResult(() => this.store.init());
+    } catch (error) {
+      if (error.code !== "INVALID_STORAGE") throw error;
+      this.recoveryRequired = true;
+      this.lastError = error.message;
+      vscode.window.showErrorMessage("DevStreak: " + error.message + " Run DevStreak: Recover History to restore or reset it.");
+    }
     this.config = this.settings();
-    this.paused = context.workspaceState.get("devstreakPaused", false) === true;
+    this.paused = context.workspaceState.get("devstreakPaused", /** @type {boolean} */ (false)) === true;
     this.tracker = new ActiveTracker({
       idleTimeoutMs: this.config.idleTimeoutMs,
       now: this.now,
@@ -54,7 +77,7 @@ class ActivityController {
         this.data = applyChanges(this.data, [change]);
       },
     });
-    this.tracker.setPaused(this.paused);
+    this.tracker.setPaused(this.paused || this.recoveryRequired);
     this.syncContext();
     this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 10);
     this.statusBar.name = "DevStreak";
@@ -73,6 +96,7 @@ class ActivityController {
     command("exportCsv", () => this.exportData("csv"));
     command("importJson", () => this.importData());
     command("clearHistory", () => this.clearHistory());
+    command("recoverHistory", () => this.recoverHistory());
 
     this.disposables.push(
       vscode.window.onDidChangeWindowState(() => {
@@ -132,8 +156,9 @@ class ActivityController {
     });
   }
 
+  /** @param {import('vscode').TextDocumentChangeEvent} event */
   onEdit(event) {
-    if (!event.contentChanges.length || this.maintenance || this.stopping) return;
+    if (!event.contentChanges.length || this.maintenance || this.stopping || this.recoveryRequired) return;
     const editor = this.vscode.window.activeTextEditor;
     if (!editor || editor.document.uri.toString() !== event.document.uri.toString()) return;
     this.syncContext();
@@ -156,6 +181,7 @@ class ActivityController {
   }
 
   async flush() {
+    if (this.recoveryRequired) return;
     if (this.flushing) return this.flushing;
     this.tracker.tick();
     const batch = this.pending.splice(0);
@@ -171,7 +197,7 @@ class ActivityController {
           this.tracker.setPaused(true);
           this.pending = [];
           this.data = await this.storageResult(() => this.store.read());
-          this.tracker.setPaused(this.paused || this.maintenance || this.stopping);
+          this.tracker.setPaused(this.paused || this.maintenance || this.stopping || this.recoveryRequired);
         } else if (error.committedData) {
           // The write succeeded but releasing the file lock failed. Retrying
           // this batch would count it twice; storage retries just the unlock.
@@ -188,31 +214,66 @@ class ActivityController {
     try { await this.flushing; } finally { this.flushing = null; }
   }
 
+  /** @returns {import('./types').DashboardSnapshot} */
   snapshot() {
     const today = localDateKey(new Date(this.now()));
-    const all = summarize(this.data, { ...this.config, today, projectId: this.projectId });
+    if (this.reportRange && this.reportRange.end > today) {
+      this.reportRange = this.reportRange.start <= today ? { ...this.reportRange, end: today } : null;
+    }
+    const selectedDate = this.selectedDate && this.selectedDate <= today ? this.selectedDate : today;
+    const all = summarize(this.data, { ...this.config, today, projectId: this.projectId,
+      includeFilesForDate: selectedDate, dayCache: this.dayCache });
     if (this.projectId && !all.projects.some((project) => project.id === this.projectId)) {
       this.projectId = "";
       return this.snapshot();
     }
     return { type: "snapshot", today, status: this.tracker.status(), paused: this.paused,
-      projectId: this.projectId, weekStartsOn: this.config.weekStartsOn, ...all };
+      projectId: this.projectId, weekStartsOn: this.config.weekStartsOn, ...all,
+      selectedDate, recoveryRequired: this.recoveryRequired, storageError: this.lastError,
+      report: this.reportRange ? summarizeRange(this.data, this.reportRange.start, this.reportRange.end,
+        { ...this.config, today, projectId: this.projectId }) : null };
   }
 
   render() {
     if (!this.statusBar || this.stopped) return;
-    const snapshot = this.snapshot();
-    // The status bar always describes all projects, independent of dashboard filters.
-    const total = summarize(this.data, { ...this.config, today: snapshot.today }).summary.todaySeconds;
-    const icon = snapshot.status === "paused" ? "$(debug-pause)" : "$(watch)";
-    const suffix = snapshot.status === "paused" ? " · Paused" : snapshot.status === "idle" ? " · Idle" : "";
-    this.statusBar.text = icon + " " + formatDuration(total) + suffix;
-    this.statusBar.tooltip = "DevStreak · " + snapshot.status + "\nToday: " + formatDuration(total)
+    const today = localDateKey(new Date(this.now()));
+    const status = this.tracker.status();
+    const total = Object.values(this.data.days[today]?.projects || {}).reduce((sum, project) => sum + project.time, 0);
+    const icon = status === "paused" ? "$(debug-pause)" : "$(watch)";
+    const suffix = status === "paused" ? " · Paused" : status === "idle" ? " · Idle" : "";
+    this.statusBar.text = this.recoveryRequired ? "$(warning) DevStreak · Recovery needed" : icon + " " + formatDuration(total) + suffix;
+    this.statusBar.tooltip = "DevStreak · " + status + "\nToday: " + formatDuration(total)
       + "\nOpen activity, goals, and tracking controls." + (this.lastError ? "\nSave error: " + this.lastError : "");
     this.statusBar.accessibilityInformation = { label: this.statusBar.tooltip };
     if (this.panel?.visible && this.panelReady) {
-      void Promise.resolve(this.panel.webview.postMessage(snapshot)).catch(() => {});
+      this.sendSnapshot();
     }
+  }
+
+  sendSnapshot() {
+    const snapshot = this.snapshot();
+    const previous = this.lastSnapshot;
+    const revision = ++this.revision;
+    /** @type {import('./types').DashboardMessage} */
+    let message;
+    if (!previous || previous.projectId !== snapshot.projectId) {
+      message = { ...snapshot, revision };
+    } else {
+      const days = {};
+      for (const [date, day] of Object.entries(snapshot.days)) {
+        const old = previous.days[date];
+        if (!old || old.time !== day.time || old.characters !== day.characters ||
+          (old.files !== day.files && JSON.stringify(old.files) !== JSON.stringify(day.files))) days[date] = day;
+      }
+      const removedDays = Object.keys(previous.days).filter((date) => !Object.hasOwn(snapshot.days, date));
+      const metadata = { ...snapshot };
+      delete metadata.days;
+      message = { ...metadata, type: "patch", days, removedDays, baseRevision: revision - 1, revision };
+    }
+    this.lastSnapshot = snapshot;
+    void Promise.resolve(this.panel.webview.postMessage(message)).then((delivered) => {
+      if (!delivered && this.revision === revision) this.lastSnapshot = null;
+    }).catch(() => { this.lastSnapshot = null; });
   }
 
   openDashboard() {
@@ -224,6 +285,7 @@ class ActivityController {
     });
     const panel = this.panel;
     this.panelReady = false;
+    this.lastSnapshot = null;
     const html = this.options.getWebviewHTML || require("./webview").getWebviewHTML;
     panel.webview.html = html(panel.webview, context.extensionUri);
     panel.onDidDispose(() => { if (this.panel === panel) this.panel = null; });
@@ -235,32 +297,48 @@ class ActivityController {
 
   async handleMessage(message) {
     if (!message || typeof message !== "object" || this.stopping) return;
-    if (message.type === "ready") { this.panelReady = true; this.render(); return; }
+    if (message.type === "ready") { this.panelReady = true; this.lastSnapshot = null; this.render(); return; }
+    if (message.type === "selectDate") {
+      if (isDateKey(message.date) && message.date <= localDateKey(new Date(this.now()))) {
+        this.selectedDate = message.date;
+        this.render();
+      }
+      return;
+    }
+    if (message.type === "report") {
+      // Validate at the host boundary before retaining a webview request.
+      summarizeRange(this.data, message.start, message.end,
+        { ...this.config, today: localDateKey(new Date(this.now())), projectId: this.projectId });
+      this.reportRange = { start: message.start, end: message.end };
+      this.render();
+      return;
+    }
     if (message.type === "filter") {
-      const projects = summarize(this.data, { ...this.config, today: localDateKey(new Date(this.now())) }).projects;
+      const projects = summarize(this.data, { ...this.config, today: localDateKey(new Date(this.now())),
+        includeFilesForDate: "", dayCache: this.dayCache }).projects;
       if (message.projectId === "" || projects.some((project) => project.id === message.projectId)) {
         this.projectId = message.projectId;
         this.render();
       }
       return;
     }
-    const commands = { togglePause: "togglePause", settings: "openSettings", exportJson: "exportJson", exportCsv: "exportCsv", importJson: "importJson", clearHistory: "clearHistory" };
+    const commands = { togglePause: "togglePause", settings: "openSettings", exportJson: "exportJson", exportCsv: "exportCsv", importJson: "importJson", clearHistory: "clearHistory", recoverHistory: "recoverHistory" };
     if (Object.hasOwn(commands, message.type)) {
       await this.vscode.commands.executeCommand("devstreak." + commands[message.type]);
     }
   }
 
   async togglePause() {
-    if (this.maintenance || this.stopping) return;
+    if (this.maintenance || this.stopping || this.recoveryRequired) return;
     this.paused = !this.paused;
-    this.tracker.setPaused(this.paused);
+    this.tracker.setPaused(this.paused || this.recoveryRequired);
     await this.context.workspaceState.update("devstreakPaused", this.paused);
     this.render();
     await this.flush();
   }
 
   async exportData(format) {
-    if (this.maintenance || this.stopping) return;
+    if (this.maintenance || this.stopping || this.recoveryRequired) return;
     const { vscode } = this;
     const uri = await vscode.window.showSaveDialog({
       title: format === "json" ? "Back up DevStreak history" : "Export DevStreak CSV",
@@ -269,8 +347,8 @@ class ActivityController {
     });
     if (!uri || this.maintenance || this.stopping) return;
     await this.flush();
-    const content = format === "json" ? JSON.stringify(validateData(this.data), null, 2) : toCsv(this.data);
-    await vscode.workspace.fs.writeFile(uri, Buffer.from(content, "utf8"));
+    const content = format === "json" ? encodeBackup(this.data) : Buffer.from(toCsv(this.data), "utf8");
+    await vscode.workspace.fs.writeFile(uri, content);
     await vscode.window.showInformationMessage("DevStreak history exported.");
   }
 
@@ -280,12 +358,13 @@ class ActivityController {
     const selected = await vscode.window.showOpenDialog({ canSelectMany: false, filters: { JSON: ["json"] }, title: "Import DevStreak backup" });
     if (!selected?.length || this.maintenance || this.stopping) return;
     const stat = await vscode.workspace.fs.stat(selected[0]);
-    if (stat.size > 20 * 1024 * 1024) throw new Error("The backup is larger than the 20 MB import limit.");
+    checkBackupSize(stat.size);
     const contents = await vscode.workspace.fs.readFile(selected[0]);
-    if (contents.byteLength > 20 * 1024 * 1024) throw new Error("The backup is larger than the 20 MB import limit.");
-    const backup = validateData(JSON.parse(Buffer.from(contents).toString("utf8")));
+    const backup = decodeBackup(contents);
     const accepted = await vscode.window.showWarningMessage(
-      "Replace DevStreak history with this backup? This affects all windows sharing this storage. Export a backup first if you want to keep your current history.",
+      this.recoveryRequired
+        ? "Restore this backup? The damaged storage file will be preserved before replacement. This affects all windows sharing this storage."
+        : "Replace DevStreak history with this backup? This affects all windows sharing this storage. Export a backup first if you want to keep your current history.",
       { modal: true }, "Replace history",
     );
     if (accepted !== "Replace history" || this.maintenance || this.stopping) return;
@@ -296,7 +375,9 @@ class ActivityController {
   async clearHistory() {
     if (this.maintenance || this.stopping) return;
     const accepted = await this.vscode.window.showWarningMessage(
-      "Clear all DevStreak history? This affects all windows sharing this storage and cannot be undone. Export a backup first to keep a copy.",
+      this.recoveryRequired
+        ? "Reset DevStreak history? The damaged storage file will be preserved before replacement. This affects all windows sharing this storage."
+        : "Clear all DevStreak history? This affects all windows sharing this storage and cannot be undone. Export a backup first to keep a copy.",
       { modal: true }, "Clear history",
     );
     if (accepted !== "Clear history" || this.maintenance || this.stopping) return;
@@ -312,23 +393,55 @@ class ActivityController {
       await this.flush();
       if (this.pending.length) await this.flush();
       try {
-        this.data = backup ? await this.store.replace(backup) : await this.store.clear();
+        this.data = this.recoveryRequired ? await this.store.recover(backup || emptyData())
+          : backup ? await this.store.replace(backup) : await this.store.clear();
       } catch (error) {
         if (!error.committedData) throw error;
         this.data = error.committedData;
         this.reportError(error);
       }
       this.pending = [];
+      this.recoveryRequired = false;
+      this.lastError = "";
+      this.lastSnapshot = null;
       this.projectId = "";
       await this.context.globalState.update("devstreakData", undefined);
     } finally {
       this.maintenance = false;
-      this.tracker.setPaused(this.paused || this.stopping);
+      this.tracker.setPaused(this.paused || this.stopping || this.recoveryRequired);
+      this.render();
+    }
+  }
+
+  async recoverHistory() {
+    if (this.maintenance || this.stopping) return;
+    const choice = await this.vscode.window.showQuickPick(["Retry loading", "Restore JSON backup", "Reset history"],
+      { title: "Recover DevStreak history", placeHolder: "Damaged storage is preserved before restore or reset." });
+    if (this.maintenance || this.stopping) return;
+    if (choice === "Restore JSON backup") return this.importData();
+    if (choice === "Reset history") return this.clearHistory();
+    if (choice !== "Retry loading") return;
+    this.tracker.setPaused(true);
+    this.maintenance = true;
+    try {
+      await this.flush();
+      this.data = await this.storageResult(() => this.store.init());
+      this.pending = [];
+      this.recoveryRequired = false;
+      this.lastError = "";
+      this.lastSnapshot = null;
+    } finally {
+      this.maintenance = false;
+      this.tracker.setPaused(this.paused || this.stopping || this.recoveryRequired);
       this.render();
     }
   }
 
   reportError(error) {
+    if (error?.code === "INVALID_STORAGE" && this.tracker) {
+      this.recoveryRequired = true;
+      this.tracker.setPaused(true);
+    }
     const message = error?.message || String(error);
     if (this.lastError !== message) this.vscode.window.showErrorMessage("DevStreak: " + message);
     this.lastError = message;

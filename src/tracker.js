@@ -3,12 +3,14 @@
 const { localDateKey } = require("./model");
 
 class ActiveTracker {
-  constructor({ onChange, now = Date.now, idleTimeoutMs = 300000, maxGapMs = 15000 } = {}) {
+  /** @param {import('./types').TrackerOptions} options */
+  constructor({ onChange, now = Date.now, idleTimeoutMs = 300000, maxGapMs = 15000 }) {
     if (typeof onChange !== "function" || typeof now !== "function") throw new TypeError("Tracker requires an onChange callback and a clock.");
     this.onChange = onChange;
     this.now = now;
     this.idleTimeoutMs = this.positiveNumber(idleTimeoutMs);
     this.maxGapMs = this.positiveNumber(maxGapMs);
+    /** @type {import('./types').TrackerContext} */
     this.context = { focused: false, active: true, eligible: false, projectId: "", projectName: "" };
     this.paused = false;
     this.lastActivity = null;
@@ -30,6 +32,8 @@ class ActiveTracker {
       this.context.eligible && Boolean(this.context.projectId) && Boolean(this.context.projectName);
   }
 
+  /** @param {Partial<import('./types').TrackerContext>} context
+   * @param {number} [now] */
   setContext(context, now) {
     const at = this.timestamp(now);
     this.tick(at);
@@ -47,6 +51,8 @@ class ActiveTracker {
     if (this.canTrack()) this.lastActivity = at;
   }
 
+  /** @param {{characters?: number, file?: import('./types').EditedFile}} [edit]
+   * @param {number} [now] */
   edit({ characters = 0, file } = {}, now) {
     if (!Number.isSafeInteger(characters) || characters < 0) throw new TypeError("Characters must be a nonnegative safe integer.");
     if (file && (typeof file.id !== "string" || !file.id || typeof file.path !== "string" || !file.path)) throw new TypeError("An edited file needs an ID and a path.");
@@ -106,6 +112,8 @@ class ActiveTracker {
     if (this.lastActivity !== null && this.lastTick >= this.lastActivity + next) this.lastActivity = null;
   }
 
+  /** @param {number} [now]
+   * @returns {'tracking' | 'idle' | 'paused'} */
   status(now) {
     const at = this.timestamp(now);
     if (this.paused) return "paused";
