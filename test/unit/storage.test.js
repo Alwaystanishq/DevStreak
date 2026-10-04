@@ -301,3 +301,44 @@ test('failed recovery preserves both the damaged source and its recovery copy', 
   store.write = write;
   assert.deepEqual(await store.recover(), emptyData());
 });
+
+test('milestone claims are atomic across stores and survive restarts and history replacement', async (t) => {
+  const { directory, store } = await setup(t);
+  await store.append([{ ...change, seconds: 60 }]);
+  const other = new ActivityStore({ directory });
+  await other.init();
+  const milestones = [{ kind: 'dailyGoal', seconds: 60 }, { kind: 'streak', seconds: 60 }];
+  const claimed = await Promise.all([store.claimMilestones(change.date, milestones), other.claimMilestones(change.date, milestones)]);
+  assert.deepEqual(claimed.flat().sort(), ['dailyGoal', 'streak']);
+  const restarted = new ActivityStore({ directory });
+  await restarted.init();
+  assert.deepEqual(await restarted.claimMilestones(change.date, milestones), []);
+  await restarted.clear();
+  await restarted.append([{ ...change, seconds: 60 }]);
+  assert.deepEqual(await restarted.claimMilestones(change.date, milestones), []);
+  assert.equal(project(await restarted.read()).time, 60);
+});
+
+test('milestone claims require saved time, valid thresholds, and the current history generation', async (t) => {
+  const { directory, store } = await setup(t);
+  const milestone = [{ kind: 'dailyGoal', seconds: 60 }];
+  assert.deepEqual(await store.claimMilestones(change.date, milestone), []);
+  await assert.rejects(fs.stat(store.notificationsPath), { code: 'ENOENT' });
+  for (const seconds of [0, -1, NaN, Infinity]) await assert.rejects(store.claimMilestones(change.date, [{ kind: 'dailyGoal', seconds }]), TypeError);
+  await assert.rejects(store.claimMilestones('2026-02-30', milestone), TypeError);
+  const other = new ActivityStore({ directory });
+  await other.init();
+  await other.replace(applyChanges(emptyData(), [{ ...change, seconds: 60 }]));
+  assert.deepEqual(await store.claimMilestones(change.date, milestone), []);
+  await assert.rejects(fs.stat(store.notificationsPath), { code: 'ENOENT' });
+});
+
+test('malformed notification history is preserved without changing saved activity', async (t) => {
+  const { store } = await setup(t);
+  await store.append([{ ...change, seconds: 60 }]);
+  const damaged = '{bad notification history';
+  await fs.writeFile(store.notificationsPath, damaged);
+  await assert.rejects(store.claimMilestones(change.date, [{ kind: 'dailyGoal', seconds: 60 }]));
+  assert.equal(await fs.readFile(store.notificationsPath, 'utf8'), damaged);
+  assert.equal(project(await store.read()).time, 60);
+});

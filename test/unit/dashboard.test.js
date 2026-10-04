@@ -347,3 +347,74 @@ test("report form rejects invalid comparisons and restores only supported ranges
   restored.receive(snapshot());
   assert.deepEqual(restored.messages.at(-1), { type: "report", start: "2026-09-30", end: "2026-10-02" });
 });
+
+test("activity trends include inactive days and fractional time with an equal preceding period", () => {
+  const ui = dashboardFixture({ trendPeriod: 7 });
+  ui.receive(activitySnapshot([["2026-09-25", 60], ["2026-09-26", 0.5], ["2026-10-02", 120], ["2026-10-03", 10000]]));
+  assert.equal(ui.document.getElementById("trend-total").textContent, "2m 0s");
+  assert.equal(ui.document.getElementById("trend-average").textContent, "17s");
+  assert.equal(ui.document.getElementById("trend-active-days").textContent, "2 / 7");
+  assert.equal(ui.document.getElementById("trend-change").textContent, "100.8% more");
+  assert.equal(ui.document.querySelectorAll(".trend-bar").length, 7);
+  const chart = ui.document.getElementById("trend-chart");
+  assert.equal(chart.querySelector('rect[data-date="2026-09-26"]').getAttribute("height"), "2");
+  assert.equal(chart.querySelector('rect[data-date="2026-09-27"]').getAttribute("height"), "0");
+  assert.equal(chart.querySelector('rect[data-date="2026-10-02"]').getAttribute("height"), "180");
+  assert.equal(ui.document.getElementById("trend-table-body").children.length, 7);
+  assert.ok(ui.document.getElementById("trend-table-body").textContent.includes("<1s"));
+  assert.equal(ui.document.getElementById("trend-empty").hidden, true);
+  assert.ok(chart.querySelector("svg").getAttribute("aria-label").includes("7 days"));
+  ui.receive(activitySnapshot([["2026-09-25", 60]]));
+  assert.equal(ui.document.getElementById("trend-change").textContent, "100% less");
+});
+
+test("trend periods switch, persist, restore, and keep unchanged chart nodes", () => {
+  const ui = dashboardFixture();
+  ui.receive(snapshot());
+  assert.equal(ui.document.querySelectorAll(".trend-bar").length, 30);
+  ui.click("trend-7");
+  assert.equal(ui.state.trendPeriod, 7);
+  assert.equal(ui.document.getElementById("trend-7").getAttribute("aria-pressed"), "true");
+  assert.equal(ui.document.querySelectorAll(".trend-bar").length, 7);
+  const chart = ui.document.getElementById("trend-chart").querySelector("svg");
+  ui.receive(snapshot());
+  assert.equal(ui.document.getElementById("trend-chart").querySelector("svg"), chart);
+  ui.click("trend-90");
+  const restored = dashboardFixture(ui.state);
+  restored.receive(snapshot());
+  assert.equal(restored.document.querySelectorAll(".trend-bar").length, 90);
+  assert.equal(restored.document.getElementById("trend-90").getAttribute("aria-pressed"), "true");
+  assert.deepEqual(ui.messages, [{ type: "ready" }]);
+});
+
+test("trends follow project filters, empty history, and midnight without changing the selected period", () => {
+  const ui = dashboardFixture({ trendPeriod: 7 });
+  const changes = [["2026-10-02", 60], ["2026-10-02", 120, "docs", "Docs"]];
+  ui.receive(activitySnapshot(changes, { projectId: "docs" }));
+  assert.equal(ui.document.getElementById("trend-total").textContent, "2m 0s");
+  assert.ok(ui.document.getElementById("trend-context").textContent.endsWith("· Docs"));
+  ui.receive(activitySnapshot(changes, { projectId: "app" }));
+  assert.equal(ui.document.getElementById("trend-total").textContent, "1m 0s");
+  ui.receive(snapshot({ today: "2026-10-03", days: {} }));
+  assert.equal(ui.document.querySelectorAll(".trend-bar")[0].dataset.date, "2026-09-27");
+  assert.equal(ui.document.querySelectorAll(".trend-bar").at(-1).dataset.date, "2026-10-03");
+  assert.equal(ui.document.getElementById("trend-empty").hidden, false);
+  assert.equal(ui.document.getElementById("trend-change").textContent, "No baseline");
+  assert.equal(ui.state.trendPeriod, 7);
+  assert.ok(ui.document.querySelectorAll(".trend-bar").every((bar) => bar.getAttribute("height") === "0"));
+});
+
+test("trend dates remain aligned across daylight-saving transitions", () => {
+  const previous = process.env.TZ;
+  process.env.TZ = "America/New_York";
+  try {
+    const ui = dashboardFixture({ trendPeriod: 7 });
+    ui.receive(snapshot({ today: "2026-03-10", days: { "2026-03-08": { time: 60, characters: 0, files: [] } } }));
+    const bars = ui.document.querySelectorAll(".trend-bar");
+    assert.deepEqual(bars.map((bar) => bar.dataset.date), ["2026-03-04", "2026-03-05", "2026-03-06", "2026-03-07", "2026-03-08", "2026-03-09", "2026-03-10"]);
+    assert.equal(ui.document.getElementById("trend-total").textContent, "1m 0s");
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+});

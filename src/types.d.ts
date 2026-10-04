@@ -2,6 +2,8 @@ import type * as vscode from 'vscode';
 import type { ActivityStore } from './storage';
 
 export interface EditedFile { id: string; path: string }
+export type MilestoneKind = 'dailyGoal' | 'streak';
+export interface Milestone { kind: MilestoneKind; seconds: number }
 export interface ActivityChange {
   date: string; projectId: string; projectName: string;
   languageId?: string; seconds?: number; characters?: number; file?: EditedFile;

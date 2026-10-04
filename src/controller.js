@@ -36,6 +36,13 @@ class ActivityController {
     this.selectedDate = "";
     /** @type {{start: string, end: string} | null} */
     this.reportRange = null;
+    this.notificationData = this.data;
+    this.notificationTask = Promise.resolve();
+    /** @type {Map<import('./types').MilestoneKind, number>} */
+    this.pendingMilestones = new Map();
+    this.milestoneDate = "";
+    this.notificationEpoch = 0;
+    this.notificationError = "";
   }
 
   settings() {
@@ -50,6 +57,8 @@ class ActivityController {
       idleTimeoutMs: number("idleTimeoutMinutes", 5, 1, 60) * 60000,
       dailyGoalMinutes: number("dailyGoalMinutes", 60, 0, 1440),
       streakMinimumMinutes: number("streakMinimumMinutes", 15, 1, 1440),
+      notifyOnDailyGoal: config.get("notifyOnDailyGoal", /** @type {boolean} */ (false)) === true,
+      notifyOnStreak: config.get("notifyOnStreak", /** @type {boolean} */ (false)) === true,
       weekStartsOn: config.get("weekStartsOn", /** @type {string} */ ("monday")) === "sunday" ? 0 : 1,
       ignoredFolders: Array.isArray(ignored) ? ignored : [],
     };
@@ -70,6 +79,7 @@ class ActivityController {
       vscode.window.showErrorMessage("DevStreak: " + error.message + " Run DevStreak: Recover History to restore or reset it.");
     }
     this.config = this.settings();
+    this.resetNotifications();
     this.paused = context.workspaceState.get("devstreakPaused", /** @type {boolean} */ (false)) === true;
     this.tracker = new ActiveTracker({
       idleTimeoutMs: this.config.idleTimeoutMs,
@@ -217,6 +227,7 @@ class ActivityController {
         this.setData(applyChanges(saved, this.pending));
         this.saveError = "";
         this.lastError = "";
+        this.queueNotifications(saved, batch);
       } catch (error) {
         if (error instanceof StaleGenerationError) {
           // Another window replaced history. Old deltas must never resurrect it.
@@ -224,6 +235,7 @@ class ActivityController {
           this.tracker.setPaused(true);
           this.pending = [];
           this.setData(await this.storageResult(() => this.store.read()));
+          this.resetNotifications();
           this.tracker.setPaused(this.paused || this.maintenance || this.stopping || this.recoveryRequired);
         } else if (error.committedData) {
           // The write succeeded but releasing the file lock failed. Retrying
@@ -231,6 +243,7 @@ class ActivityController {
           this.setData(applyChanges(error.committedData, this.pending));
           this.saveError = error?.message || String(error);
           this.reportError(error);
+          this.queueNotifications(error.committedData, batch);
         } else {
           this.pending.unshift(...batch);
           this.saveError = error?.message || String(error);
@@ -240,6 +253,71 @@ class ActivityController {
     })();
     this.render();
     try { await this.flushing; } finally { this.flushing = null; this.render(); }
+  }
+
+  resetNotifications() {
+    this.notificationData = this.data;
+    this.pendingMilestones.clear();
+    this.notificationEpoch++;
+  }
+
+  /** @param {import('./types').ActivityData} saved
+   * @param {import('./types').ActivityChange[]} batch */
+  queueNotifications(saved, batch) {
+    const today = localDateKey(new Date(this.now()));
+    const total = (data) => Object.values(data.days[today]?.projects || {}).reduce((sum, project) => sum + project.time, 0);
+    const previous = total(this.notificationData);
+    const current = total(saved);
+    this.notificationData = saved;
+    if (this.milestoneDate !== today) {
+      this.pendingMilestones.clear();
+      this.milestoneDate = today;
+    }
+    if (this.maintenance || this.stopping || this.recoveryRequired) return;
+    if (batch.some((change) => change.date === today && change.seconds > 0)) {
+      const goal = this.config.dailyGoalMinutes * 60;
+      const streak = this.config.streakMinimumMinutes * 60;
+      if (this.config.notifyOnDailyGoal && goal > 0 && previous < goal && current >= goal) this.pendingMilestones.set("dailyGoal", goal);
+      if (this.config.notifyOnStreak && previous < streak && current >= streak) this.pendingMilestones.set("streak", streak);
+    }
+    if (!this.pendingMilestones.size) return;
+    const epoch = this.notificationEpoch;
+    this.notificationTask = this.notificationTask.then(async () => {
+      if (this.stopping || this.maintenance || this.recoveryRequired || epoch !== this.notificationEpoch
+        || today !== localDateKey(new Date(this.now()))) return;
+      if (!this.config.notifyOnDailyGoal || this.config.dailyGoalMinutes === 0
+        || this.pendingMilestones.get("dailyGoal") !== this.config.dailyGoalMinutes * 60) this.pendingMilestones.delete("dailyGoal");
+      if (!this.config.notifyOnStreak || this.pendingMilestones.get("streak") !== this.config.streakMinimumMinutes * 60) this.pendingMilestones.delete("streak");
+      const milestones = [...this.pendingMilestones].map(([kind, seconds]) => ({ kind, seconds }));
+      if (!milestones.length) return;
+      let claimed;
+      try { claimed = await this.store.claimMilestones(today, milestones); }
+      catch (error) {
+        // Claims are durable before a lock-release error, just like activity.
+        if (!Array.isArray(error.committedData)) throw error;
+        claimed = error.committedData;
+      }
+      this.notificationError = "";
+      if (epoch !== this.notificationEpoch) return;
+      for (const { kind } of milestones) this.pendingMilestones.delete(kind);
+      if (!claimed.length || this.stopping || this.maintenance || this.recoveryRequired
+        || today !== localDateKey(new Date(this.now()))) return;
+      const goal = claimed.includes("dailyGoal") && this.config.notifyOnDailyGoal
+        && milestones.some((item) => item.kind === "dailyGoal" && item.seconds === this.config.dailyGoalMinutes * 60);
+      const streak = claimed.includes("streak") && this.config.notifyOnStreak
+        && milestones.some((item) => item.kind === "streak" && item.seconds === this.config.streakMinimumMinutes * 60);
+      if (!goal && !streak) return;
+      const message = goal && streak ? "DevStreak: Daily goal reached and today's streak secured."
+        : goal ? "DevStreak: Daily active-time goal reached." : "DevStreak: Today's streak threshold reached.";
+      void Promise.resolve(this.vscode.window.showInformationMessage(message, "Open Activity")).then((choice) => {
+        if (choice === "Open Activity" && !this.stopping) return this.vscode.commands.executeCommand("devstreak.openActivity");
+      }).catch((error) => this.reportError(error));
+    }).catch((error) => {
+      if (error.code === "INVALID_STORAGE") { this.reportError(error); return; }
+      const message = error?.message || String(error);
+      if (message !== this.notificationError) this.vscode.window.showErrorMessage("DevStreak could not save a milestone notification: " + message);
+      this.notificationError = message;
+    });
   }
 
   /** @returns {import('./types').DashboardSnapshot} */
@@ -435,6 +513,7 @@ class ActivityController {
       this.setData(await this.storageResult(() => this.recoveryRequired ? this.store.recover(backup || emptyData())
         : backup ? this.store.replace(backup) : this.store.clear()));
       this.pending = [];
+      this.resetNotifications();
       this.recoveryRequired = false;
       this.lastError = "";
       this.lastSnapshot = null;
@@ -464,7 +543,12 @@ class ActivityController {
       const loaded = await this.storageResult(() => this.store.init());
       // Retry can repair the same history without replacing it. Retain the
       // deltas from a failed save, but never resurrect a replaced generation.
-      if (generation === null || generation !== this.store.generation) this.pending = [];
+      if (generation === null || generation !== this.store.generation) {
+        this.pending = [];
+        this.notificationData = loaded;
+        this.pendingMilestones.clear();
+        this.notificationEpoch++;
+      }
       this.setData(applyChanges(loaded, this.pending));
       this.recoveryRequired = false;
       this.lastError = "";

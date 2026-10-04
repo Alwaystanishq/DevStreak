@@ -12,6 +12,7 @@
     projectId: typeof saved.projectId === "string" ? saved.projectId : "",
     breakdownPeriod: saved.breakdownPeriod === "month" ? "month" : "week",
     languagePeriod: saved.languagePeriod === "month" ? "month" : "week",
+    trendPeriod: typeof saved.trendPeriod === "number" && [7, 30, 90].includes(saved.trendPeriod) ? saved.trendPeriod : 30,
     reportStart: isDateKey(saved.reportStart) ? saved.reportStart : "",
     reportEnd: isDateKey(saved.reportEnd) ? saved.reportEnd : "",
   };
@@ -23,6 +24,7 @@
   let breakdownKey = "";
   let languageKey = "";
   let reportKey = "";
+  let trendKey = "";
   let revision = 0;
   let requestedDate = "";
   let restoredReport = false;
@@ -338,6 +340,76 @@
     return `${shortDateFormatter.format(parseDate(start))} – ${shortDateFormatter.format(parseDate(end))}`;
   }
 
+  function renderTrend() {
+    const period = state.trendPeriod;
+    const end = parseDate(snapshot.today);
+    const values = [];
+    let previousSeconds = 0;
+    for (let i = 0; i < period * 2; i++) {
+      const date = new Date(end.getTime());
+      date.setUTCDate(date.getUTCDate() - (period * 2 - 1 - i));
+      const key = dateKey(date);
+      const time = activitySeconds(record(key).time);
+      if (i < period) previousSeconds += time;
+      else values.push({ date: key, time });
+    }
+    const total = values.reduce((sum, day) => sum + day.time, 0);
+    const activeDays = values.filter((day) => day.time > 0).length;
+    const start = values[0].date;
+    const project = snapshot.projects.find((item) => item.id === state.projectId);
+    setText("trend-context", `${dateRange(start, snapshot.today)} · ${project ? project.name : "All projects"}`);
+    setText("trend-total", duration(total, true));
+    setText("trend-average", duration(total / period, true));
+    setText("trend-active-days", `${activeDays} / ${period}`);
+    const change = previousSeconds > 0 ? (total - previousSeconds) / previousSeconds : null;
+    setText("trend-change", change === null ? "No baseline" : change === 0 ? "No change" : `${percentFormatter.format(Math.abs(change))} ${change > 0 ? "more" : "less"}`);
+    for (const length of [7, 30, 90]) byId(`trend-${length}`).setAttribute("aria-pressed", String(period === length));
+    byId("trend-empty").hidden = activeDays > 0;
+    setText("trend-start", shortDateFormatter.format(parseDate(start)));
+    setText("trend-end", shortDateFormatter.format(end));
+    setText("trend-table-caption", `Daily active time · ${dateRange(start, snapshot.today)}`);
+    const signature = JSON.stringify([period, values]);
+    if (signature === trendKey) return;
+    trendKey = signature;
+    const svgElement = (tag) => document.createElementNS("http://www.w3.org/2000/svg", tag);
+    const chart = svgElement("svg");
+    chart.setAttribute("viewBox", "0 0 900 210");
+    chart.setAttribute("preserveAspectRatio", "none");
+    chart.setAttribute("role", "img");
+    chart.setAttribute("aria-label", `Daily active time over ${period} days, ${duration(total, true)} total. Daily values are available in the table below.`);
+    const maximum = Math.max(...values.map((day) => day.time));
+    setText("trend-maximum", `Highest day: ${duration(maximum, true)}`);
+    const baseline = svgElement("line");
+    baseline.setAttribute("x1", "0"); baseline.setAttribute("x2", "900");
+    baseline.setAttribute("y1", "208"); baseline.setAttribute("y2", "208");
+    baseline.setAttribute("class", "trend-baseline");
+    chart.append(baseline);
+    const step = 900 / period;
+    const gap = Math.min(5, step / 3);
+    const rows = values.map((day, index) => {
+      const bar = svgElement("rect");
+      const height = day.time > 0 ? Math.max(2, day.time / maximum * 180) : 0;
+      bar.setAttribute("x", String(index * step + gap / 2));
+      bar.setAttribute("y", String(208 - height));
+      bar.setAttribute("width", String(step - gap));
+      bar.setAttribute("height", String(height));
+      bar.setAttribute("rx", "2");
+      bar.setAttribute("class", "trend-bar");
+      bar.setAttribute("data-date", day.date);
+      const title = svgElement("title");
+      title.textContent = `${fullDateFormatter.format(parseDate(day.date))}: ${duration(day.time, true)} active time`;
+      bar.append(title);
+      chart.append(bar);
+      const row = element("tr");
+      const heading = element("th", "", shortDateFormatter.format(parseDate(day.date)));
+      heading.setAttribute("scope", "row");
+      row.append(heading, element("td", "", duration(day.time, true)));
+      return row;
+    });
+    byId("trend-chart").replaceChildren(chart);
+    byId("trend-table-body").replaceChildren(...rows);
+  }
+
   function renderInsights() {
     const insights = snapshot.insights;
     if (!insights) return;
@@ -483,6 +555,7 @@
     renderProjects();
     renderCalendar();
     renderDetails();
+    renderTrend();
     renderInsights();
     renderBreakdown();
     renderLanguages();
@@ -574,6 +647,11 @@
     state.languagePeriod = period;
     persist();
     if (snapshot) renderLanguages();
+  });
+  for (const period of [7, 30, 90]) byId(`trend-${period}`).addEventListener("click", () => {
+    state.trendPeriod = period;
+    persist();
+    if (snapshot) renderTrend();
   });
   byId("report-form").addEventListener("submit", (event) => {
     event.preventDefault();

@@ -1,7 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { emptyData, validateData, migrateLegacy, applyChanges } = require('./model');
+const { emptyData, validateData, migrateLegacy, applyChanges, isDateKey } = require('./model');
 
 class StaleGenerationError extends Error {
   constructor() {
@@ -25,6 +25,7 @@ class ActivityStore {
     this.directory = directory;
     this.filePath = path.join(directory, 'activity.json');
     this.lockPath = path.join(directory, 'activity.lock');
+    this.notificationsPath = path.join(directory, 'notifications.json');
     this.legacyData = legacyData;
     this.lockTimeoutMs = lockTimeoutMs;
     this.generation = null;
@@ -91,6 +92,43 @@ class ActivityStore {
     return this.replace(emptyData());
   }
 
+  /** Atomically claim milestones across windows, independently of history backups.
+   * @param {string} date
+   * @param {import('./types').Milestone[]} milestones
+   * @returns {Promise<import('./types').MilestoneKind[]>} */
+  claimMilestones(date, milestones) {
+    if (!isDateKey(date) || !Array.isArray(milestones) || milestones.some((item) =>
+      !item || !['dailyGoal', 'streak'].includes(item.kind) || !Number.isFinite(item.seconds) || item.seconds <= 0)) {
+      return Promise.reject(new TypeError('Invalid notification milestone.'));
+    }
+    const expectedGeneration = this.generation;
+    const candidates = milestones.map((item) => ({ ...item }));
+    return this.enqueue(() => this.withLock(async () => {
+      const stored = await this.loadRequired();
+      if (expectedGeneration === null || stored.generation !== expectedGeneration) return [];
+      const total = Object.values(stored.data.days[date]?.projects || {}).reduce((sum, project) => sum + project.time, 0);
+      const eligible = candidates.filter((item) => total >= item.seconds);
+      if (!eligible.length) return [];
+      /** @type {{version: number, days: Record<string, import('./types').MilestoneKind[]>}} */
+      let ledger = { version: 1, days: {} };
+      try {
+        ledger = JSON.parse(await fs.readFile(this.notificationsPath, 'utf8'));
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      if (!ledger || ledger.version !== 1 || !ledger.days || typeof ledger.days !== 'object' || Array.isArray(ledger.days)
+        || Object.entries(ledger.days).some(([key, kinds]) => !isDateKey(key) || !Array.isArray(kinds)
+          || kinds.some((kind) => !['dailyGoal', 'streak'].includes(kind)))) {
+        throw new Error('DevStreak notification history is invalid.');
+      }
+      const seen = ledger.days[date] || [];
+      const claimed = [...new Set(eligible.map((item) => item.kind))].filter((kind) => !seen.includes(kind));
+      if (claimed.length) {
+        ledger.days[date] = [...seen, ...claimed];
+        await this.write(ledger, this.notificationsPath);
+      }
+      return claimed;
+    }));
+  }
+
   recover(data = emptyData()) {
     let snapshot;
     try { snapshot = validateData(structuredClone(data)); } catch (error) { return Promise.reject(error); }
@@ -111,9 +149,12 @@ class ActivityStore {
     }));
   }
 
+  /** @template T
+   * @param {() => T | Promise<T>} operation
+   * @returns {Promise<T>} */
   enqueue(operation) {
     const pending = this.queue.then(operation);
-    this.queue = pending.catch(() => {});
+    this.queue = pending.then(() => {}, () => {});
     return pending;
   }
 
@@ -139,8 +180,8 @@ class ActivityStore {
     return stored;
   }
 
-  async write(stored) {
-    const temporary = `${this.filePath}.tmp-${process.pid}-${randomUUID()}`;
+  async write(stored, filePath = this.filePath) {
+    const temporary = `${filePath}.tmp-${process.pid}-${randomUUID()}`;
     let handle;
     let failure;
     try {
@@ -149,7 +190,7 @@ class ActivityStore {
       await handle.sync();
       await handle.close();
       handle = null;
-      await fs.rename(temporary, this.filePath);
+      await fs.rename(temporary, filePath);
     } catch (error) { failure = error; }
     finally {
       if (handle) {
@@ -165,12 +206,16 @@ class ActivityStore {
     if (failure) throw failure;
   }
 
+  /** @template T
+   * @param {() => T | Promise<T>} operation
+   * @returns {Promise<T>} */
   async withLock(operation) {
     if (this.pendingRelease) {
       await this.pendingRelease();
       this.pendingRelease = null;
     }
     const release = await this.acquireLock();
+    /** @type {T} */
     let value;
     let failure;
     try { value = await operation(); } catch (error) { failure = error; }

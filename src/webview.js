@@ -135,6 +135,29 @@ function getWebviewHTML(webview, extensionUri) {
       </div>
     </section>
 
+    <section class="analytics-panel trend-panel" aria-labelledby="trend-title">
+      <div class="breakdown-toolbar">
+        <div class="section-heading"><h2 id="trend-title">Activity trends</h2><p id="trend-context">Daily active time through today.</p></div>
+        <div class="view-switch" role="group" aria-label="Activity trend period">
+          <button type="button" id="trend-7" aria-pressed="false">7 days</button>
+          <button type="button" id="trend-30" aria-pressed="true">30 days</button>
+          <button type="button" id="trend-90" aria-pressed="false">90 days</button>
+        </div>
+      </div>
+      <dl class="trend-metrics">
+        <div><dt>Total active time</dt><dd id="trend-total">—</dd></div>
+        <div><dt>Average per calendar day</dt><dd id="trend-average">—</dd></div>
+        <div><dt>Active days</dt><dd id="trend-active-days">—</dd></div>
+        <div><dt>Compared with previous period</dt><dd id="trend-change">—</dd></div>
+      </dl>
+      <p id="trend-maximum" class="trend-scale"></p>
+      <div id="trend-chart" class="trend-chart"></div>
+      <div class="trend-axis" aria-hidden="true"><span id="trend-start"></span><span id="trend-end"></span></div>
+      <p id="trend-empty" class="empty-breakdown" hidden>No active time recorded in this period. Your next session will appear here.</p>
+      <details class="trend-data"><summary>View daily values</summary><table><caption id="trend-table-caption">Daily active time</caption><thead><tr><th scope="col">Date</th><th scope="col">Active time</th></tr></thead><tbody id="trend-table-body"></tbody></table></details>
+      <p class="analytics-note">Includes inactive days. Hover over a bar or view daily values to see its duration.</p>
+    </section>
+
     <section class="analytics-grid" aria-label="Activity insights">
       <article class="analytics-panel" aria-labelledby="insights-title">
         <div class="section-heading"><h2 id="insights-title">Weekly insights</h2><p id="insights-context">This week through today.</p></div>

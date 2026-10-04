@@ -22,13 +22,14 @@ The dashboard opens on the current month with today selected. Before your first 
 | Activity calendar | Month and year views, intensity levels based on active time, and details for each date. |
 | Day details | Precise duration, characters added, and edited files grouped by project. |
 | Weekly insights | Comparison with the same weekdays last week, average time per active day, and days meeting your goal. |
+| Activity trends | A daily bar chart for the last 7, 30, or 90 days, total time, average per calendar day, active days, and comparison with the preceding period. Includes an accessible daily-values table. |
 | Project breakdown | Each project's active time and share for this week or month. |
 | Language breakdown | Time and share by the editor's language mode, with its own week/month selection. |
 | Date-range report | Totals, active days, goal days, and project/language shares for any past or current date range, compared with the preceding period of the same length. |
 
-The **Project** filter applies to dashboard summaries, calendar details, streaks, goals, and reports. The status bar and data exports always include all projects. Weekly and monthly breakdowns run through today, independently of the month you are viewing in the calendar.
+The **Project** filter applies to dashboard summaries, calendar details, streaks, goals, trends, and reports. The status bar, notifications, and data exports always include all projects. Weekly and monthly breakdowns and trends run through today, independently of the month you are viewing in the calendar.
 
-Your selected date, calendar view, project filter, breakdown periods, and applied report dates are remembered while the dashboard tab remains open. The dashboard follows VS Code's theme and adapts to narrow editor groups.
+Your selected date, calendar view, project filter, breakdown periods, trend period, and applied report dates are remembered while the dashboard tab remains open. The dashboard follows VS Code's theme and adapts to narrow editor groups.
 
 ## How tracking works
 
@@ -52,7 +53,13 @@ Edited files retain their full URI identity and display workspace-relative paths
 
 A streak day requires **15 minutes** of active time by default. If yesterday qualified, your current streak stays visible while you work toward today's threshold. A missed previous day breaks the streak. Calendar colors represent active time; hover over the legend to see the thresholds.
 
-The daily goal defaults to **60 minutes** and can be disabled by setting it to `0`. Historical goal-day counts use your current goal. Averages include only days with positive active time; edits alone do not make an active day. Comparisons show **No baseline** when the preceding period has no active time.
+The daily goal defaults to **60 minutes** and can be disabled by setting it to `0`. Historical goal-day counts use your current goal. Weekly and date-range averages include only days with positive active time; the trend chart's average includes every calendar day in the selected period. Edits alone do not make an active day. Comparisons show **No baseline** when the preceding period has no active time.
+
+### Optional notifications
+
+Enable **Notify On Daily Goal** or **Notify On Streak** in Settings to receive a notification when newly saved activity reaches the corresponding threshold. Both are off by default. Notifications count all projects and offer **Open Activity**. If both thresholds are reached in the same save, they share one notification.
+
+Each milestone is notified at most once per local day across windows sharing the extension's storage, including after restarting VS Code or clearing history. Loading or importing existing history and changing targets do not trigger notifications. Notification dates and milestone names are stored locally in `notifications.json`, separately from activity backups. Notifications wait for a successful save; they can appear up to five seconds after reaching a threshold.
 
 Dates use the extension host's local timezone, and sessions crossing midnight are split between days. Date-range reports include both endpoints and compare the preceding range with the same number of calendar days. In remote development, the extension host's timezone and storage may be on the remote machine.
 
@@ -65,6 +72,8 @@ Open **Settings** from the dashboard or run **DevStreak: Open Settings**. You ca
 | `devstreak.idleTimeoutMinutes` | `5` | Maximum time between editor interactions before becoming idle; accepts 1–60 minutes. Inactivity or loss of focus can stop tracking sooner. |
 | `devstreak.dailyGoalMinutes` | `60` | Daily active-time target; accepts 0–1440 minutes. Set to `0` to disable it. |
 | `devstreak.streakMinimumMinutes` | `15` | Active time needed for a streak day; accepts 1–1440 minutes. |
+| `devstreak.notifyOnDailyGoal` | `false` | Notify once per local day when newly saved activity reaches the daily goal. A goal of `0` disables this notification. |
+| `devstreak.notifyOnStreak` | `false` | Notify once per local day when newly saved activity reaches the streak threshold. |
 | `devstreak.weekStartsOn` | `"monday"` | Start calendar weeks and weekly summaries on `"monday"` or `"sunday"`. |
 | `devstreak.ignoredFolders` | `["node_modules", ".git", "dist", "build"]` | Folder names or relative folder paths to exclude, such as `src/generated`. |
 

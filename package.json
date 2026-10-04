@@ -79,6 +79,16 @@
           "maximum": 1440,
           "description": "Minimum active minutes in a local calendar day to qualify for a streak."
         },
+        "devstreak.notifyOnDailyGoal": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show a notification once per local day when newly saved activity reaches your daily goal. Includes all projects."
+        },
+        "devstreak.notifyOnStreak": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show a notification once per local day when newly saved activity reaches your streak threshold. Includes all projects."
+        },
         "devstreak.weekStartsOn": {
           "type": "string",
           "enum": [

@@ -82,6 +82,7 @@ function dashboardFixture(savedState = {}) {
   const document = new Element("document");
   document.ownerDocument = document;
   document.createElement = (tag) => new Element(tag, document);
+  document.createElementNS = (_namespace, tag) => new Element(tag, document);
   document.getElementById = (id) => {
     const visit = (node) => node.getAttribute("id") === id ? node : node.children.map(visit).find(Boolean);
     return visit(document);

@@ -18,11 +18,13 @@ function event() {
 }
 
 async function fixture(t, options = {}) {
-  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "devstreak-controller-"));
+  const directory = options.directory || await fs.mkdtemp(path.join(os.tmpdir(), "devstreak-controller-"));
   const commands = new Map();
   const messages = [];
   const errors = [];
   const state = new Map();
+  const settings = options.settings || {};
+  const information = [];
   const uri = (value) => ({ scheme: "file", path: value, fsPath: value, toString: () => "file://" + value });
   const editor = { document: { uri: uri("/work/app/src/index.js"), fileName: "/work/app/src/index.js", languageId: "javascript" } };
   const panel = {
@@ -46,10 +48,10 @@ async function fixture(t, options = {}) {
       createWebviewPanel: () => panel,
       showErrorMessage: (message) => errors.push(message),
       showWarningMessage: async () => undefined,
-      showInformationMessage: async () => {},
+      showInformationMessage: async (message, ...actions) => { information.push({ message, actions }); },
     },
     workspace: {
-      getConfiguration: () => ({ get: (_key, fallback) => fallback }),
+      getConfiguration: () => ({ get: (key, fallback) => settings[key] ?? fallback }),
       getWorkspaceFolder: () => ({ name: "app", uri: uri("/work/app") }),
       onDidChangeTextDocument: event(), onDidOpenTextDocument: event(), onDidChangeConfiguration: event(), onDidChangeWorkspaceFolders: event(),
     },
@@ -66,11 +68,12 @@ async function fixture(t, options = {}) {
   await controller.start();
   t.after(async () => {
     await controller.stop();
-    await fs.rm(directory, { recursive: true, force: true });
+    await controller.notificationTask;
+    if (!options.directory) await fs.rm(directory, { recursive: true, force: true });
   });
   const edit = (text) => vscode.workspace.onDidChangeTextDocument.fire({ document: editor.document, contentChanges: [{ text }] });
   const advance = (ms) => { now += ms; controller.tracker.tick(); controller.render(); };
-  return { controller, vscode, context, edit, advance, panel, messages, errors, commands, directory, editor };
+  return { controller, vscode, context, edit, advance, panel, messages, errors, commands, directory, editor, settings, information };
 }
 
 test("activation does not create activity; edits count Unicode characters and update an open dashboard", async (t) => {
@@ -522,4 +525,134 @@ test("retry loading discards unsaved activity if another window replaced damaged
   assert.deepEqual((await other.read()).days, {});
   assert.equal(f.controller.pending.length, 0);
   assert.equal(f.controller.recoveryRequired, false);
+});
+
+function recordSeconds(f, count) {
+  f.edit("x");
+  for (let i = 0; i < count; i++) f.advance(1000);
+}
+
+test("milestone notifications are opt-in and combine simultaneous goal and streak achievements", async (t) => {
+  const disabled = await fixture(t, { settings: { dailyGoalMinutes: 1, streakMinimumMinutes: 1 } });
+  recordSeconds(disabled, 60);
+  await disabled.controller.flush();
+  await disabled.controller.notificationTask;
+  assert.deepEqual(disabled.information, []);
+  const f = await fixture(t, { settings: { dailyGoalMinutes: 1, streakMinimumMinutes: 1, notifyOnDailyGoal: true, notifyOnStreak: true } });
+  recordSeconds(f, 60);
+  assert.deepEqual(f.information, []);
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.equal(f.information.length, 1);
+  assert.ok(f.information[0].message.includes("Daily goal reached and today's streak secured"));
+  assert.deepEqual(f.information[0].actions, ["Open Activity"]);
+  recordSeconds(f, 60);
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.equal(f.information.length, 1);
+  assert.deepEqual(f.errors, []);
+});
+
+test("goal and streak notifications can fire separately and ignore the project filter", async (t) => {
+  const f = await fixture(t, { settings: { dailyGoalMinutes: 2, streakMinimumMinutes: 1, notifyOnDailyGoal: true, notifyOnStreak: true } });
+  f.controller.projectId = "another-project";
+  recordSeconds(f, 60);
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.equal(f.information.length, 1);
+  assert.ok(f.information[0].message.includes("streak threshold"));
+  recordSeconds(f, 60);
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.equal(f.information.length, 2);
+  assert.ok(f.information[1].message.includes("Daily active-time goal"));
+});
+
+test("milestone notifications wait for successful saves and retry a failed claim without replaying activity", async (t) => {
+  const f = await fixture(t, { settings: { dailyGoalMinutes: 1, notifyOnDailyGoal: true } });
+  recordSeconds(f, 60);
+  const append = f.controller.store.append.bind(f.controller.store);
+  f.controller.store.append = async () => { throw new Error("save failed"); };
+  await assert.rejects(f.controller.flush(), /save failed/);
+  assert.deepEqual(f.information, []);
+  f.controller.store.append = append;
+  const claim = f.controller.store.claimMilestones.bind(f.controller.store);
+  f.controller.store.claimMilestones = async () => { throw new Error("notification write failed"); };
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.deepEqual(f.information, []);
+  assert.equal(f.controller.pending.length, 0);
+  f.controller.store.claimMilestones = claim;
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.equal(f.information.length, 1);
+  assert.equal(summarize(await f.controller.store.read()).summary.todaySeconds, 60);
+});
+
+test("imports, goal changes, disabled goals, and shutdown do not produce retroactive notifications", async (t) => {
+  const f = await fixture(t, { settings: { dailyGoalMinutes: 2, notifyOnDailyGoal: true } });
+  recordSeconds(f, 60);
+  await f.controller.flush();
+  f.settings.dailyGoalMinutes = 1;
+  f.vscode.workspace.onDidChangeConfiguration.fire({ affectsConfiguration: () => true });
+  recordSeconds(f, 1);
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.deepEqual(f.information, []);
+  await f.controller.replaceHistory({ version: 3, days: { [localDateKey()]: { projects: {
+    imported: { name: "Imported", time: 3600, characters: 0, files: {}, languages: { unknown: 3600 } },
+  } } } });
+  recordSeconds(f, 1);
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.deepEqual(f.information, []);
+  f.settings.dailyGoalMinutes = 0;
+  f.vscode.workspace.onDidChangeConfiguration.fire({ affectsConfiguration: () => true });
+  await f.controller.replaceHistory(null);
+  recordSeconds(f, 60);
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.deepEqual(f.information, []);
+  f.settings.dailyGoalMinutes = 2;
+  f.vscode.workspace.onDidChangeConfiguration.fire({ affectsConfiguration: () => true });
+  recordSeconds(f, 60);
+  await f.controller.stop();
+  await f.controller.notificationTask;
+  assert.deepEqual(f.information, []);
+});
+
+test("notifications reset at local midnight and remain at most once per day after clearing history", async (t) => {
+  const f = await fixture(t, { now: new Date(2026, 9, 2, 23, 57).getTime(), settings: { dailyGoalMinutes: 1, notifyOnDailyGoal: true } });
+  recordSeconds(f, 60);
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.equal(f.information.length, 1);
+  await f.controller.replaceHistory(null);
+  recordSeconds(f, 60);
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.equal(f.information.length, 1);
+  recordSeconds(f, 120);
+  await f.controller.flush();
+  await f.controller.notificationTask;
+  assert.equal(f.information.length, 2);
+});
+
+test("multiple windows notify once when their combined saved activity reaches a milestone", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "devstreak-notifications-"));
+  const settings = { dailyGoalMinutes: 1, notifyOnDailyGoal: true };
+  const first = await fixture(t, { directory, settings });
+  const second = await fixture(t, { directory, settings });
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  recordSeconds(first, 30);
+  recordSeconds(second, 30);
+  await first.controller.flush();
+  await first.controller.notificationTask;
+  await second.controller.flush();
+  await second.controller.notificationTask;
+  assert.equal(first.information.length + second.information.length, 1);
+  recordSeconds(first, 30);
+  await first.controller.flush();
+  await first.controller.notificationTask;
+  assert.equal(first.information.length + second.information.length, 1);
 });
