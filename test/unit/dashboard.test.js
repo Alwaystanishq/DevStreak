@@ -275,3 +275,75 @@ test("unknown and custom languages render safely with fractional shares", () => 
   assert.ok(chart.textContent.includes("my-dsl"));
   assert.equal(ui.document.getElementById("language-note").hidden, true);
 });
+
+test("fractional time is retained for calendar totals, streak thresholds, and goal completion", () => {
+  const ui = dashboardFixture({ mode: "year" });
+  const data = activitySnapshot([["2026-10-01", 0.8], ["2026-10-02", 60.5]], {
+    dailyGoalMinutes: 1.01, streakMinimumMinutes: 1.01,
+  });
+  ui.receive(data);
+  assert.equal(ui.document.getElementById("goal-value").textContent, "99%");
+  assert.equal(ui.document.getElementById("day-badge").hidden, true);
+  assert.equal(ui.date("2026-10-02").dataset.level, "1");
+  assert.equal(ui.date("2026-10-01").dataset.level, "1");
+  const october = ui.document.querySelector('button[data-month="2026-10-01"]').parentElement;
+  assert.equal(october.querySelector(".mini-month-total").textContent, "1m");
+  const small = activitySnapshot([["2026-10-01", 0.8], ["2026-10-02", 0.8]]);
+  ui.receive(small);
+  assert.equal(october.querySelector(".mini-month-total").textContent, "1s");
+});
+
+test("calendar labels survive a skipped local date and years below 100", () => {
+  const previous = process.env.TZ;
+  process.env.TZ = "Pacific/Apia";
+  try {
+    const ui = dashboardFixture();
+    ui.receive(snapshot({ today: "2011-12-31", days: {}, selectedDate: "2011-12-30" }));
+    ui.document.getElementById("calendar").fire("click", ui.date("2011-12-30"));
+    assert.equal(ui.state.selectedDate, "2011-12-30");
+    assert.equal(ui.document.querySelectorAll("button[data-date]").length, 31);
+    assert.ok(ui.document.getElementById("selected-day-title").textContent.includes("30"));
+    const early = dashboardFixture({ viewedMonth: "0099-12-01", selectedDate: "0099-12-31" });
+    early.receive(snapshot());
+    assert.ok(early.date("0099-12-31"));
+    early.document.getElementById("calendar").fire("keydown", early.date("0099-12-31"), { key: "ArrowRight" });
+    assert.equal(early.state.selectedDate, "0100-01-01");
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+});
+
+test("calendar totals exclude future activity and navigation respects the earliest supported date", () => {
+  const ui = dashboardFixture({ mode: "year" });
+  ui.receive(activitySnapshot([["2026-10-02", 60], ["2026-10-03", 3600]]));
+  const october = ui.document.querySelector('button[data-month="2026-10-01"]').parentElement;
+  assert.equal(october.querySelector(".mini-month-total").textContent, "1m");
+  const early = dashboardFixture({ viewedMonth: "0001-01-01", selectedDate: "0001-01-01" });
+  early.receive(snapshot());
+  assert.equal(early.document.getElementById("previous-period").disabled, true);
+  early.click("previous-period");
+  assert.equal(early.state.viewedMonth, "0001-01-01");
+  early.document.getElementById("calendar").fire("keydown", early.date("0001-01-01"), { key: "ArrowLeft" });
+  assert.equal(early.state.selectedDate, "0001-01-01");
+});
+
+test("report form rejects invalid comparisons and restores only supported ranges", () => {
+  const ui = dashboardFixture({ reportStart: "0001-01-01", reportEnd: "2026-10-02" });
+  ui.receive(snapshot());
+  assert.deepEqual(ui.messages, [{ type: "ready" }]);
+  const start = ui.document.getElementById("report-start");
+  const end = ui.document.getElementById("report-end");
+  start.value = "0001-01-01";
+  end.value = "2026-10-02";
+  ui.document.getElementById("report-form").fire("submit");
+  assert.equal(ui.document.getElementById("report-error").hidden, false);
+  assert.deepEqual(ui.messages, [{ type: "ready" }]);
+  start.value = "2026-09-30";
+  ui.document.getElementById("report-form").fire("submit");
+  assert.equal(ui.document.getElementById("report-error").hidden, true);
+  assert.deepEqual(ui.messages.at(-1), { type: "report", start: "2026-09-30", end: "2026-10-02" });
+  const restored = dashboardFixture({ reportStart: "2026-09-30", reportEnd: "2026-10-02" });
+  restored.receive(snapshot());
+  assert.deepEqual(restored.messages.at(-1), { type: "report", start: "2026-09-30", end: "2026-10-02" });
+});

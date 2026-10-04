@@ -251,3 +251,53 @@ test('version-2 storage preserves old totals and persists language migration on 
   assert.deepEqual(project(persisted.data).languages, { unknown: 10, javascript: 1 });
   assert.deepEqual(await new ActivityStore({ directory }).init(), persisted.data);
 });
+
+test('a committed atomic write does not attempt to delete its moved temporary file', async (t) => {
+  const { store } = await setup(t);
+  const unlink = fs.unlink;
+  fs.unlink = async (file) => {
+    if (file.startsWith(`${store.filePath}.tmp-`)) throw Object.assign(new Error('temporary path inaccessible'), { code: 'EACCES' });
+    return unlink(file);
+  };
+  try {
+    await store.append([change]);
+  } finally { fs.unlink = unlink; }
+  assert.equal(project(await store.read()).time, 1);
+});
+
+test('recovery preserves damaged storage and invalidates other windows pending activity', async (t) => {
+  const { directory, store } = await setup(t);
+  const other = new ActivityStore({ directory });
+  await other.init();
+  const damaged = '{broken history';
+  await fs.writeFile(store.filePath, damaged);
+  const backup = applyChanges(emptyData(), [{ ...change, seconds: 120 }]);
+  assert.deepEqual(await store.recover(backup), backup);
+  assert.equal(await fs.readFile(store.lastRecoveryPath, 'utf8'), damaged);
+  await assert.rejects(other.append([change]), StaleGenerationError);
+  assert.deepEqual(await other.read(), backup);
+  await store.append([change]);
+  assert.equal(project(await store.read()).time, 121);
+});
+
+test('recovery refuses to overwrite history that another window already repaired', async (t) => {
+  const { store } = await setup(t);
+  await store.append([change]);
+  const before = await fs.readFile(store.filePath, 'utf8');
+  await assert.rejects(store.recover(), /readable again/);
+  assert.equal(await fs.readFile(store.filePath, 'utf8'), before);
+  assert.equal(store.lastRecoveryPath, undefined);
+});
+
+test('failed recovery preserves both the damaged source and its recovery copy', async (t) => {
+  const { store } = await setup(t);
+  const damaged = '{broken history';
+  await fs.writeFile(store.filePath, damaged);
+  const write = store.write.bind(store);
+  store.write = async () => { throw new Error('disk full'); };
+  await assert.rejects(store.recover(), /disk full/);
+  assert.equal(await fs.readFile(store.filePath, 'utf8'), damaged);
+  assert.equal(await fs.readFile(store.lastRecoveryPath, 'utf8'), damaged);
+  store.write = write;
+  assert.deepEqual(await store.recover(), emptyData());
+});

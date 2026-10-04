@@ -2,7 +2,7 @@
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { emptyData, validateData, migrateLegacy, applyChanges, summarize, localDateKey, parseLocalDate, formatDuration, toCsv } = require("../../src/model");
+const { emptyData, validateData, migrateLegacy, applyChanges, summarize, summarizeRange, localDateKey, parseLocalDate, formatDuration, toCsv } = require("../../src/model");
 
 function change(date, seconds, extra = {}) {
   return { date, seconds, projectId: "file:///project", projectName: "Project", characters: 0, ...extra };
@@ -340,4 +340,79 @@ test("CSV includes language durations without changing its date/project row grou
   assert.ok(csv.includes('"Language active seconds"'));
   assert.ok(csv.includes('"{""javascript"":2,""python"":3}"'));
   assert.equal(csv.split("\r\n").length, 3);
+});
+
+test("range reports include both endpoints, compare equal periods, and honor filters and goals", () => {
+  const data = applyChanges(emptyData(), [
+    change("2024-02-26", 30), change("2024-02-27", 30),
+    change("2024-02-28", 60, { languageId: "javascript" }),
+    change("2024-02-29", 120, { languageId: "python" }),
+    change("2024-02-29", 300, { projectId: "docs" }),
+    change("2024-03-01", 1000),
+  ]);
+  const report = summarizeRange(data, "2024-02-28", "2024-02-29", {
+    today: "2024-03-01", projectId: "file:///project", dailyGoalMinutes: 1,
+  });
+  assert.equal(report.comparisonStart, "2024-02-26");
+  assert.equal(report.comparisonEnd, "2024-02-27");
+  assert.equal(report.totalSeconds, 180);
+  assert.equal(report.previousSeconds, 60);
+  assert.equal(report.changePercent, 200);
+  assert.equal(report.activeDays, 2);
+  assert.equal(report.averageSeconds, 90);
+  assert.equal(report.goalDays, 2);
+  assert.deepEqual(report.languages, [{ id: "python", seconds: 120 }, { id: "javascript", seconds: 60 }]);
+  assert.equal(report.projects.length, 1);
+  const empty = summarizeRange(data, "2024-02-28", "2024-02-29", {
+    today: "2024-03-01", projectId: "missing", dailyGoalMinutes: 0,
+  });
+  assert.equal(empty.totalSeconds, 0);
+  assert.equal(empty.averageSeconds, 0);
+  assert.equal(empty.goalDays, null);
+  assert.equal(empty.changePercent, null);
+});
+
+test("report comparisons use calendar labels even when a timezone skipped a date", () => {
+  const data = applyChanges(emptyData(), [change("2011-12-30", 60), change("2011-12-31", 120)]);
+  for (const timezone of ["UTC", "Asia/Kolkata", "America/New_York", "Pacific/Apia"]) {
+    inTimezone(timezone, () => {
+      const report = summarizeRange(data, "2011-12-31", "2011-12-31", { today: "2011-12-31" });
+      assert.equal(report.comparisonStart, "2011-12-30");
+      assert.equal(report.comparisonEnd, "2011-12-30");
+      assert.equal(report.previousSeconds, 60);
+      assert.equal(report.changePercent, 100);
+    });
+  }
+});
+
+test("range reports reject invalid dates and comparisons outside supported calendar years", () => {
+  for (const [start, end] of [
+    ["2025-02-29", "2025-03-01"], ["2026-10-03", "2026-10-02"],
+    ["2026-10-05", "2026-10-06"], ["0001-01-01", "2026-10-05"],
+    ["1000-01-01", "2026-10-05"],
+  ]) {
+    assert.throws(() => summarizeRange(emptyData(), start, end, { today: "2026-10-05" }), TypeError);
+  }
+  assert.throws(() => summarizeRange(emptyData(), "2026-10-01", "2026-10-02", { today: "invalid" }), TypeError);
+  const report = summarizeRange(emptyData(), "0001-01-02", "0001-01-02", { today: "2026-10-05" });
+  assert.equal(report.comparisonStart, "0001-01-01");
+});
+
+test("streaks advance through skipped local dates without looping or joining a gap", () => {
+  inTimezone("Pacific/Apia", () => {
+    const data = applyChanges(emptyData(), [change("2011-12-29", 900), change("2011-12-31", 900)]);
+    const result = summarize(data, { today: "2011-12-31" });
+    assert.equal(result.summary.currentStreak, 1);
+    assert.equal(result.summary.longestStreak, 1);
+    const continuous = applyChanges(data, [change("2011-12-30", 900)]);
+    assert.equal(summarize(continuous, { today: "2011-12-31" }).summary.currentStreak, 3);
+  });
+});
+
+test("range reports use the same fallback goal as dashboard summaries", () => {
+  const data = applyChanges(emptyData(), [change("2026-10-02", 3600)]);
+  for (const dailyGoalMinutes of [undefined, NaN, Infinity, -1]) {
+    const options = { today: "2026-10-02", dailyGoalMinutes };
+    assert.equal(summarizeRange(data, "2026-10-02", "2026-10-02", options).goalDays, summarize(data, options).insights.goalDays);
+  }
 });

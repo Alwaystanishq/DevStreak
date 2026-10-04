@@ -178,9 +178,12 @@ function applyChanges(data, changes) {
 }
 
 function shiftDate(key, offset) {
-  const date = parseLocalDate(key);
-  date.setDate(date.getDate() + offset);
-  return localDateKey(date);
+  if (!isDateKey(key)) throw new TypeError(`Invalid date: ${key}`);
+  // These are calendar labels, not instants. Local timezone transitions can
+  // skip an entire date, which must still remain addressable in imported data.
+  const date = new Date(key + "T12:00:00Z");
+  date.setUTCDate(date.getUTCDate() + offset);
+  return `${String(date.getUTCFullYear()).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
 function periodActivity(data, start, end, projectId, goalSeconds, names) {
@@ -247,7 +250,8 @@ function daySummary(day, projectId, includeFiles, cache) {
  * @returns {import('./types').SummaryResult} */
 function summarize(data, options = {}) {
   const today = options.today || localDateKey();
-  const todayDate = parseLocalDate(today);
+  if (!isDateKey(today)) throw new TypeError(`Invalid date: ${today}`);
+  const todayDate = new Date(today + "T12:00:00Z");
   const projectId = options.projectId || "";
   const dailyGoalMinutes = Number.isFinite(options.dailyGoalMinutes) && options.dailyGoalMinutes >= 0 ? options.dailyGoalMinutes : 60;
   const streakMinimumMinutes = Number.isFinite(options.streakMinimumMinutes) && options.streakMinimumMinutes > 0 ? options.streakMinimumMinutes : 15;
@@ -278,7 +282,7 @@ function summarize(data, options = {}) {
     currentStreak++;
     cursor = shiftDate(cursor, -1);
   }
-  const weekStart = shiftDate(today, -((todayDate.getDay() - weekStartsOn + 7) % 7));
+  const weekStart = shiftDate(today, -((todayDate.getUTCDay() - weekStartsOn + 7) % 7));
   const goalSeconds = dailyGoalMinutes * 60;
   const week = periodActivity(data, weekStart, today, projectId, goalSeconds, projects);
   // Compare the same weekdays, rather than a partial week with seven full days.
@@ -316,17 +320,22 @@ function summarize(data, options = {}) {
  * @returns {import('./types').RangeReport} */
 function summarizeRange(data, start, end, options = {}) {
   const today = options.today || localDateKey();
-  if (!isDateKey(start) || !isDateKey(end) || start > end || end > today) {
+  if (!isDateKey(today) || !isDateKey(start) || !isDateKey(end) || start > end || end > today) {
     throw new TypeError('Choose valid dates in order, ending on or before today.');
   }
   const length = Math.round((Date.parse(end + 'T12:00:00Z') - Date.parse(start + 'T12:00:00Z')) / 86400000) + 1;
+  const comparisonStart = shiftDate(start, -length);
+  const comparisonEnd = shiftDate(start, -1);
+  if (!isDateKey(comparisonStart) || !isDateKey(comparisonEnd)) {
+    throw new TypeError('Choose a later start date so the comparison period stays within years 0001–9999.');
+  }
   const names = new Map();
   for (const date of Object.keys(data.days).sort()) {
     for (const [id, project] of Object.entries(data.days[date].projects)) names.set(id, project.name);
   }
-  const goal = (options.dailyGoalMinutes ?? 60) * 60;
+  const goal = (Number.isFinite(options.dailyGoalMinutes) && options.dailyGoalMinutes >= 0 ? options.dailyGoalMinutes : 60) * 60;
   const current = periodActivity(data, start, end, options.projectId || '', goal, names);
-  const previous = periodActivity(data, shiftDate(start, -length), shiftDate(start, -1), options.projectId || '', goal, names);
+  const previous = periodActivity(data, comparisonStart, comparisonEnd, options.projectId || '', goal, names);
   const changeSeconds = current.totalSeconds - previous.totalSeconds;
   return { ...current, comparisonStart: previous.start, comparisonEnd: previous.end,
     previousSeconds: previous.totalSeconds, changeSeconds,

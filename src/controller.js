@@ -459,11 +459,17 @@ class ActivityController {
     this.maintenance = true;
     try {
       await this.flush();
-      this.setData(await this.storageResult(() => this.store.init()));
-      this.pending = [];
+      if (this.pending.length) await this.flush();
+      const generation = this.store.generation;
+      const loaded = await this.storageResult(() => this.store.init());
+      // Retry can repair the same history without replacing it. Retain the
+      // deltas from a failed save, but never resurrect a replaced generation.
+      if (generation === null || generation !== this.store.generation) this.pending = [];
+      this.setData(applyChanges(loaded, this.pending));
       this.recoveryRequired = false;
       this.lastError = "";
       this.lastSnapshot = null;
+      if (this.pending.length) await this.flush();
     } finally {
       this.maintenance = false;
       this.tracker.setPaused(this.paused || this.stopping || this.recoveryRequired);

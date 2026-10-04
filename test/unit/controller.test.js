@@ -456,3 +456,70 @@ test("version-3 import and export preserve language buckets", async (t) => {
   await f.controller.exportData("json");
   assert.deepEqual(exported, backup);
 });
+
+test("retry loading drains edits queued behind an in-flight save", async (t) => {
+  const f = await fixture(t);
+  f.edit("first");
+  const append = f.controller.store.append.bind(f.controller.store);
+  let release;
+  let first = true;
+  f.controller.store.append = async (changes) => {
+    if (first) {
+      first = false;
+      await new Promise((resolve) => { release = resolve; });
+    }
+    return append(changes);
+  };
+  const saving = f.controller.flush();
+  f.edit("second");
+  f.advance(1000);
+  f.vscode.window.showQuickPick = async () => "Retry loading";
+  const recovering = f.controller.recoverHistory();
+  release();
+  await Promise.all([saving, recovering]);
+  const day = summarize(await f.controller.store.read()).days[localDateKey()];
+  assert.equal(day.characters, 11);
+  assert.equal(day.time, 1);
+  assert.equal(f.controller.pending.length, 0);
+  assert.deepEqual(f.errors, []);
+});
+
+test("retry loading preserves unsaved edits when damaged history is repaired in place", async (t) => {
+  const f = await fixture(t);
+  const original = await fs.readFile(f.controller.store.filePath);
+  f.edit("unsaved");
+  await fs.writeFile(f.controller.store.filePath, "{broken");
+  await assert.rejects(f.controller.flush(), (error) => {
+    f.controller.reportError(error);
+    return error.code === "INVALID_STORAGE";
+  });
+  assert.equal(f.controller.recoveryRequired, true);
+  await fs.writeFile(f.controller.store.filePath, original);
+  f.vscode.window.showQuickPick = async () => "Retry loading";
+  await f.controller.recoverHistory();
+  const day = summarize(await f.controller.store.read()).days[localDateKey()];
+  assert.equal(day.characters, 7);
+  assert.equal(f.controller.recoveryRequired, false);
+  assert.equal(f.controller.pending.length, 0);
+});
+
+test("retry loading discards unsaved activity if another window replaced damaged history", async (t) => {
+  const f = await fixture(t);
+  const original = await fs.readFile(f.controller.store.filePath);
+  f.edit("old");
+  await fs.writeFile(f.controller.store.filePath, "{broken");
+  await assert.rejects(f.controller.flush(), (error) => {
+    f.controller.reportError(error);
+    return error.code === "INVALID_STORAGE";
+  });
+  await fs.writeFile(f.controller.store.filePath, original);
+  const other = new ActivityStore({ directory: f.directory });
+  await other.init();
+  await other.clear();
+  f.vscode.window.showQuickPick = async () => "Retry loading";
+  await f.controller.recoverHistory();
+  assert.deepEqual(f.controller.data.days, {});
+  assert.deepEqual((await other.read()).days, {});
+  assert.equal(f.controller.pending.length, 0);
+  assert.equal(f.controller.recoveryRequired, false);
+});

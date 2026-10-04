@@ -155,8 +155,12 @@ class ActivityStore {
       if (handle) {
         try { await handle.close(); } catch (error) { failure ||= error; }
       }
-      try { await fs.unlink(temporary); }
-      catch (error) { if (error.code !== 'ENOENT') failure ||= error; }
+      // After rename the write is committed and there is no temporary file.
+      // A cleanup failure must not make callers replay already saved activity.
+      if (failure) {
+        try { await fs.unlink(temporary); }
+        catch (error) { if (error.code !== 'ENOENT') failure ||= error; }
+      }
     }
     if (failure) throw failure;
   }

@@ -32,28 +32,43 @@
    * @param {K} id
    * @returns {import('../src/types').DashboardElements[K]} */
   const byId = (id) => /** @type {import('../src/types').DashboardElements[K]} */ (document.getElementById(id));
-  const fullDateFormatter = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" });
-  const monthFormatter = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" });
+  // Display the host's calendar labels independently of the webview timezone.
+  const fullDateFormatter = new Intl.DateTimeFormat(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric", timeZone: "UTC" });
+  const monthFormatter = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric", timeZone: "UTC" });
   const numberFormatter = new Intl.NumberFormat();
   const percentFormatter = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 });
-  const shortDateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
+  const shortDateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 
   /** @param {unknown} value
    * @returns {value is string} */
   function isDateKey(value) {
     if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-    const date = new Date(value + "T12:00:00");
-    return Number.isFinite(date.getTime()) && dateKey(date) === value;
+    const date = parseDate(value);
+    return Number.isFinite(date.getTime()) && date.getUTCFullYear() > 0 && dateKey(date) === value;
   }
 
   function dateKey(date) {
-    return `${String(date.getFullYear()).padStart(4, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    return `${String(date.getUTCFullYear()).padStart(4, "0")}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
   }
 
-  function parseDate(key) { return new Date(key + "T12:00:00"); }
-  function seconds(value) { return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0; }
+  function parseDate(key) { return new Date(key + "T12:00:00Z"); }
+  function calendarDate(year, month, day) {
+    const date = new Date(0);
+    date.setUTCHours(12, 0, 0, 0);
+    date.setUTCFullYear(year, month, day);
+    return date;
+  }
+  function hasComparisonPeriod(start, end) {
+    const first = parseDate(start);
+    const length = Math.round((parseDate(end).getTime() - first.getTime()) / 86400000) + 1;
+    first.setUTCDate(first.getUTCDate() - length);
+    return isDateKey(dateKey(first));
+  }
+  function activitySeconds(value) { return Number.isFinite(value) ? Math.max(0, value) : 0; }
+  function seconds(value) { return Math.floor(activitySeconds(value)); }
 
   function duration(value, precise = false) {
+    if (activitySeconds(value) > 0 && value < 1) return "<1s";
     const total = seconds(value);
     const hours = Math.floor(total / 3600);
     const minutes = Math.floor(total % 3600 / 60);
@@ -64,7 +79,7 @@
   }
 
   function compactDuration(value) {
-    const total = seconds(value);
+    const total = activitySeconds(value);
     if (!total) return "";
     if (total < 60) return "<1m";
     if (total < 3600) return `${Math.floor(total / 60)}m`;
@@ -92,7 +107,7 @@
   function persist() { vscode.setState({ ...state }); }
   /** @param {import('../src/types').DashboardRequest['type']} type */
   function send(type, extra = {}) { vscode.postMessage(/** @type {import('../src/types').DashboardRequest} */ ({ type, ...extra })); }
-  function threshold() { return Math.max(1, seconds(snapshot.summary.qualifyingSeconds) || 900); }
+  function threshold() { return Math.max(1, activitySeconds(snapshot.summary.qualifyingSeconds) || 900); }
   function record(date) { return snapshot.days[date] || { time: 0, characters: 0, files: [] }; }
   function level(time) { return time <= 0 ? 0 : time < threshold() ? 1 : time < threshold() * 2 ? 2 : time < threshold() * 4 ? 3 : 4; }
 
@@ -105,8 +120,8 @@
     const longest = seconds(summary.longestStreak);
     setText("streak-value", `${streak} ${streak === 1 ? "day" : "days"}`);
     setText("longest-value", `Longest: ${longest} ${longest === 1 ? "day" : "days"}`);
-    const goal = seconds(summary.goalSeconds);
-    const progress = goal ? Math.min(100, Math.floor(seconds(summary.todaySeconds) / goal * 100)) : 0;
+    const goal = activitySeconds(summary.goalSeconds);
+    const progress = goal ? Math.min(100, Math.floor(activitySeconds(summary.todaySeconds) / goal * 100)) : 0;
     setText("goal-value", goal ? `${progress}%` : "Off");
     setText("goal-caption", goal ? `${duration(summary.todaySeconds)} of ${duration(goal)}${progress === 100 ? " · Complete" : " today"}` : "Enable a goal in Settings");
     byId("goal-progress").value = progress;
@@ -163,12 +178,12 @@
 
   function makeMonth(year, month, compact) {
     const section = element("section", compact ? "mini-month" : "full-month");
-    const start = new Date(year, month, 1, 12);
+    const start = calendarDate(year, month, 1);
     const monthKey = dateKey(start).slice(0, 7);
     section.setAttribute("aria-label", monthFormatter.format(start));
     if (compact) {
       const heading = element("div", "mini-month-heading");
-      const button = element("button", "", start.toLocaleDateString(undefined, { month: "long" }));
+      const button = element("button", "", start.toLocaleDateString(undefined, { month: "long", timeZone: "UTC" }));
       button.type = "button";
       button.dataset.month = monthKey + "-01";
       button.disabled = monthKey > snapshot.today.slice(0, 7);
@@ -182,20 +197,20 @@
     weekdays.setAttribute("aria-hidden", "true");
     const weekStart = snapshot.weekStartsOn === 1 ? 1 : 0;
     for (let i = 0; i < 7; i++) {
-      const weekday = new Date(2023, 0, 1 + (i + weekStart) % 7, 12);
-      const label = element("span", "weekday", weekday.toLocaleDateString(undefined, { weekday: compact ? "narrow" : "short" }));
+      const weekday = calendarDate(2023, 0, 1 + (i + weekStart) % 7);
+      const label = element("span", "weekday", weekday.toLocaleDateString(undefined, { weekday: compact ? "narrow" : "short", timeZone: "UTC" }));
       weekdays.append(label);
     }
     const grid = element("div", "days-grid");
-    const offset = (start.getDay() - weekStart + 7) % 7;
+    const offset = (start.getUTCDay() - weekStart + 7) % 7;
     for (let i = 0; i < offset; i++) {
       const blank = element("span", "day-placeholder");
       blank.setAttribute("aria-hidden", "true");
       grid.append(blank);
     }
-    const count = new Date(year, month + 1, 0).getDate();
+    const count = calendarDate(year, month + 1, 0).getUTCDate();
     for (let day = 1; day <= count; day++) {
-      const key = dateKey(new Date(year, month, day, 12));
+      const key = dateKey(calendarDate(year, month, day));
       const button = element("button", "day-cell");
       button.type = "button";
       button.dataset.date = key;
@@ -211,8 +226,8 @@
 
   function renderCalendar() {
     const viewed = parseDate(state.viewedMonth);
-    const year = viewed.getFullYear();
-    const month = viewed.getMonth();
+    const year = viewed.getUTCFullYear();
+    const month = viewed.getUTCMonth();
     const key = `${state.mode}:${state.viewedMonth}:${snapshot.weekStartsOn}`;
     if (calendarKey !== key) {
       calendarKey = key;
@@ -228,12 +243,13 @@
     byId("month-view").setAttribute("aria-pressed", String(state.mode === "month"));
     byId("year-view").setAttribute("aria-pressed", String(state.mode === "year"));
     byId("previous-period").setAttribute("aria-label", `Previous ${state.mode}`);
+    byId("previous-period").disabled = state.mode === "year" ? year <= 1 : state.viewedMonth <= "0001-01-01";
     byId("next-period").setAttribute("aria-label", `Next ${state.mode}`);
-    byId("next-period").disabled = state.mode === "year" ? year >= parseDate(snapshot.today).getFullYear() : state.viewedMonth.slice(0, 7) >= snapshot.today.slice(0, 7);
+    byId("next-period").disabled = state.mode === "year" ? year >= parseDate(snapshot.today).getUTCFullYear() : state.viewedMonth.slice(0, 7) >= snapshot.today.slice(0, 7);
     const available = [...dateButtons].filter(([date]) => date <= snapshot.today);
     const tabDate = dateButtons.has(state.selectedDate) ? state.selectedDate : dateButtons.has(snapshot.today) ? snapshot.today : available[0]?.[0];
     for (const [date, button] of dateButtons) {
-      const time = seconds(record(date).time);
+      const time = activitySeconds(record(date).time);
       const selected = date === state.selectedDate;
       button.dataset.level = String(level(time));
       button.classList.toggle("is-selected", selected);
@@ -252,7 +268,7 @@
     }
     for (const [monthKey, label] of monthTotals) {
       label.parentElement.querySelector("button").disabled = monthKey > snapshot.today.slice(0, 7);
-      const total = Object.entries(snapshot.days).reduce((sum, [date, day]) => sum + (date.startsWith(monthKey + "-") ? seconds(day.time) : 0), 0);
+      const total = Object.entries(snapshot.days).reduce((sum, [date, day]) => sum + (date <= snapshot.today && date.startsWith(monthKey + "-") ? activitySeconds(day.time) : 0), 0);
       const text = total ? duration(total) : "";
       if (label.textContent !== text) label.textContent = text;
     }
@@ -301,7 +317,7 @@
 
   function renderDetails() {
     const day = record(state.selectedDate);
-    const time = seconds(day.time);
+    const time = activitySeconds(day.time);
     const files = Array.isArray(day.files) ? day.files : [];
     setText("selected-day-context", state.selectedDate === snapshot.today ? "TODAY" : "SELECTED DAY");
     setText("selected-day-title", fullDateFormatter.format(parseDate(state.selectedDate)));
@@ -477,9 +493,9 @@
   function changePeriod(direction) {
     if (!snapshot) return;
     const date = parseDate(state.viewedMonth);
-    date.setMonth(date.getMonth() + direction * (state.mode === "year" ? 12 : 1));
+    date.setUTCMonth(date.getUTCMonth() + direction * (state.mode === "year" ? 12 : 1));
     const next = dateKey(date);
-    if (direction > 0 && (state.mode === "year" ? date.getFullYear() > parseDate(snapshot.today).getFullYear() : next.slice(0, 7) > snapshot.today.slice(0, 7))) return;
+    if (!isDateKey(next) || direction > 0 && (state.mode === "year" ? date.getUTCFullYear() > parseDate(snapshot.today).getUTCFullYear() : next.slice(0, 7) > snapshot.today.slice(0, 7))) return;
     state.viewedMonth = next;
     persist();
     renderCalendar();
@@ -528,17 +544,17 @@
   });
   byId("calendar").addEventListener("keydown", (event) => {
     const button = /** @type {HTMLElement} */ (event.target).closest("button");
-    if (!button || !snapshot) return;
+    if (!button || !snapshot || !button.dataset.date) return;
     const date = parseDate(button.dataset.date);
     const steps = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 };
-    if (Object.hasOwn(steps, event.key)) date.setDate(date.getDate() + steps[event.key]);
-    else if (event.key === "Home") date.setDate(date.getDate() - (date.getDay() - (snapshot.weekStartsOn === 1 ? 1 : 0) + 7) % 7);
-    else if (event.key === "End") date.setDate(date.getDate() + 6 - (date.getDay() - (snapshot.weekStartsOn === 1 ? 1 : 0) + 7) % 7);
+    if (Object.hasOwn(steps, event.key)) date.setUTCDate(date.getUTCDate() + steps[event.key]);
+    else if (event.key === "Home") date.setUTCDate(date.getUTCDate() - (date.getUTCDay() - (snapshot.weekStartsOn === 1 ? 1 : 0) + 7) % 7);
+    else if (event.key === "End") date.setUTCDate(date.getUTCDate() + 6 - (date.getUTCDay() - (snapshot.weekStartsOn === 1 ? 1 : 0) + 7) % 7);
     else if (event.key === "PageUp" || event.key === "PageDown") {
-      const day = date.getDate();
-      date.setDate(1);
-      date.setMonth(date.getMonth() + (event.key === "PageUp" ? -1 : 1));
-      date.setDate(Math.min(day, new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()));
+      const day = date.getUTCDate();
+      date.setUTCDate(1);
+      date.setUTCMonth(date.getUTCMonth() + (event.key === "PageUp" ? -1 : 1));
+      date.setUTCDate(Math.min(day, calendarDate(date.getUTCFullYear(), date.getUTCMonth() + 1, 0).getUTCDate()));
     } else return;
     event.preventDefault();
     const key = dateKey(date);
@@ -566,6 +582,11 @@
     const end = byId("report-end").value;
     if (!isDateKey(start) || !isDateKey(end) || start > end || end > snapshot.today) {
       setText("report-error", "Choose valid dates in order, ending on or before today.");
+      byId("report-error").hidden = false;
+      return;
+    }
+    if (!hasComparisonPeriod(start, end)) {
+      setText("report-error", "Choose a later start date so the comparison period stays within years 0001–9999.");
       byId("report-error").hidden = false;
       return;
     }
@@ -620,7 +641,7 @@
     }
     if (!restoredReport) {
       restoredReport = true;
-      if (state.reportStart && state.reportEnd && state.reportStart <= state.reportEnd && state.reportEnd <= data.today) {
+      if (state.reportStart && state.reportEnd && state.reportStart <= state.reportEnd && state.reportEnd <= data.today && hasComparisonPeriod(state.reportStart, state.reportEnd)) {
         send("report", { start: state.reportStart, end: state.reportEnd });
       }
     }
